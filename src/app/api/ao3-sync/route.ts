@@ -63,6 +63,49 @@ function extractDdText(html: string, ddClass: string): string {
   return match ? stripTags(match[1]) : "";
 }
 
+async function fetchAo3WithMirrors(path: string): Promise<Response> {
+  const headers = {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,pt-BR;q=0.8",
+    Cookie: "view_adult=true",
+  };
+
+  // Lista de domínios/espelhos e proxies para contornar erros 525 de SSL do Cloudflare em data centers da Vercel
+  const candidateUrls = [
+    `https://archiveofourown.org${path}`,
+    `https://archiveofourown.gay${path}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(
+      `https://archiveofourown.org${path}`
+    )}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(
+      `https://archiveofourown.org${path}`
+    )}`,
+  ];
+
+  let lastResponse: Response | null = null;
+  for (const url of candidateUrls) {
+    try {
+      const res = await fetch(url, { headers, cache: "no-store" });
+      if (res.ok) {
+        const text = await res.clone().text();
+        if (text && (text.includes("Archive of Our Own") || text.includes("dl class=\"work meta\"") || text.includes("chapters"))) {
+          return res;
+        }
+      }
+      lastResponse = res;
+    } catch {
+      // Tentar próximo espelho
+    }
+  }
+
+  return (
+    lastResponse ||
+    new Response("Erro ao conectar ao AO3", { status: 525 })
+  );
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -76,20 +119,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const workUrl = `https://archiveofourown.org/works/${workId}?view_adult=true`;
-    const navigateUrl = `https://archiveofourown.org/works/${workId}/navigate`;
-
-    const headers = {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9,pt-BR;q=0.8",
-      Cookie: "view_adult=true",
-    };
-
     const [workRes, navRes] = await Promise.all([
-      fetch(workUrl, { headers, cache: "no-store" }),
-      fetch(navigateUrl, { headers, cache: "no-store" }).catch(() => null),
+      fetchAo3WithMirrors(`/works/${workId}?view_adult=true`),
+      fetchAo3WithMirrors(`/works/${workId}/navigate`).catch(() => null),
     ]);
 
     if (!workRes.ok) {

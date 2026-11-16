@@ -7,6 +7,7 @@ import { db, ensureDatabaseSeeded } from "@/core/db/database";
 import {
   addOrSyncTrackedWorkFromAo3Url,
   checkAllTrackedWorksOnAo3Original,
+  saveTrackedWorkFromPayload,
 } from "@/core/services/ao3OriginalSync";
 import { READER_THEMES, useReaderStore } from "@/store/useReaderStore";
 import { StatusIconsGrid } from "@/components/ao3/StatusIconsGrid";
@@ -56,8 +57,35 @@ export function Ao3TrackerDashboard() {
     ensureDatabaseSeeded();
   }, []);
 
-  // Detectar se o usuário clicou no botão da Extensão / Bookmarklet dentro do AO3 Original (?ao3Url=...&chapter=...)
+  // Detectar se o usuário clicou no botão da Extensão dentro do AO3 Original (?ao3Payload=... ou ?ao3Url=...)
   useEffect(() => {
+    const incomingPayload = searchParams?.get("ao3Payload");
+    if (incomingPayload) {
+      try {
+        const parsed = JSON.parse(incomingPayload);
+        setIsAdding(true);
+        saveTrackedWorkFromPayload(parsed)
+          .then(({ work }) => {
+            setFeedbackBanner({
+              type: "success",
+              message: `✓ Fanfic "${work.title}" (por ${work.author}) adicionada instantaneamente pela Extensão! (Você está no Cap. ${work.chaptersReadByMe} de ${work.chaptersPublishedOnAo3}).`,
+            });
+            // Limpar os parâmetros da URL sem recarregar a página
+            window.history.replaceState({}, "", "/tracker");
+          })
+          .catch((err: Error) => {
+            setFeedbackBanner({
+              type: "error",
+              message: err.message,
+            });
+          })
+          .finally(() => setIsAdding(false));
+        return;
+      } catch {
+        // Segue para ao3Url se não for JSON válido
+      }
+    }
+
     const incomingUrl = searchParams?.get("ao3Url");
     const incomingChapter = searchParams?.get("chapter");
     if (incomingUrl) {
@@ -72,6 +100,7 @@ export function Ao3TrackerDashboard() {
             message: `✓ Fanfic "${work.title}" sincronizada diretamente do AO3 Original! (Você está no Cap. ${work.chaptersReadByMe} de ${work.chaptersPublishedOnAo3}).`,
           });
           setAo3InputUrl("");
+          window.history.replaceState({}, "", "/tracker");
         })
         .catch((err: Error) => {
           setFeedbackBanner({

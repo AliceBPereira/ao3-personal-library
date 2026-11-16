@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "AO3 Personal Library — Rastreador de Fanfics",
-  "version": "1.1.0",
-  "description": "Adiciona botão direto dentro do Archive of Our Own (AO3) para acompanhar fanfics e salvar automaticamente em qual capítulo você parou no seu AO3 Personal Library.",
+  "version": "1.2.0",
+  "description": "Sincroniza fanfics e verifica atualizações diretamente pelo seu navegador no AO3 Original (sem bloqueios 525 do Cloudflare e com suporte a obras trancadas).",
   "permissions": ["storage"],
   "host_permissions": [
     "https://archiveofourown.org/*",
@@ -10,11 +10,16 @@
     "https://ao3-personal-library.vercel.app/*",
     "http://localhost:3000/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": [
         "https://archiveofourown.org/*",
-        "https://*.archiveofourown.org/*"
+        "https://*.archiveofourown.org/*",
+        "https://ao3-personal-library.vercel.app/*",
+        "http://localhost:3000/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

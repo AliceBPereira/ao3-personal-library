@@ -8,12 +8,131 @@ export interface SyncCheckSummary {
   updatedTitles: string[];
 }
 
-// Adiciona ou atualiza uma fanfic consultando diretamente o AO3 Original (archiveofourown.org)
+// Salva diretamente os dados extraídos do DOM do AO3 pela nossa Extensão (0ms e zero erro 525!)
+export async function saveTrackedWorkFromPayload(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data: any,
+  manualChaptersRead?: number,
+  notes?: string
+): Promise<{ work: AO3TrackedWork; hadNewChapters: boolean }> {
+  const id = `ao3-${data.ao3WorkId}`;
+  const existing = await db.trackedAo3Works.get(id);
+
+  const previousPublished = existing?.chaptersPublishedOnAo3 || 0;
+  const newPublished = data.chaptersPublishedOnAo3 || 1;
+
+  const chaptersReadByMe =
+    manualChaptersRead !== undefined
+      ? manualChaptersRead
+      : data.detectedChapterNumber !== null &&
+        data.detectedChapterNumber !== undefined
+      ? data.detectedChapterNumber
+      : existing
+      ? existing.chaptersReadByMe
+      : Math.max(0, newPublished - 1);
+
+  const trackedWork: AO3TrackedWork = {
+    id,
+    ao3WorkId: String(data.ao3WorkId),
+    ao3Url:
+      data.ao3Url || `https://archiveofourown.org/works/${data.ao3WorkId}`,
+    title: data.title || `Obra AO3 #${data.ao3WorkId}`,
+    author: data.author || "Autor AO3",
+    fandoms:
+      Array.isArray(data.fandoms) && data.fandoms.length > 0
+        ? data.fandoms
+        : ["AO3 Fandom"],
+    rating: data.rating || "not_rated",
+    category: data.category || "gen",
+    warningStatus: data.warningStatus || "none",
+    completionStatus: data.completionStatus || "wip",
+    tags: data.tags || {
+      warnings: ["Não se aplicam avisos de arquivo."],
+      relationships: [],
+      characters: [],
+      freeforms: [],
+    },
+    summary:
+      data.summary || "Fanfic acompanhada diretamente no AO3 Original.",
+    language: data.language || "English",
+    wordCount: Number(data.wordCount) || 0,
+    chaptersReadByMe: Math.min(chaptersReadByMe, newPublished),
+    chaptersPublishedOnAo3: newPublished,
+    chaptersTotalOnAo3:
+      data.chaptersTotalOnAo3 !== undefined ? data.chaptersTotalOnAo3 : null,
+    chapterLinks: Array.isArray(data.chapterLinks) ? data.chapterLinks : [],
+    ao3UpdatedAt: data.ao3UpdatedAt || new Date().toISOString().slice(0, 10),
+    lastCheckedAt: new Date().toISOString(),
+    lastReadAt: existing?.lastReadAt,
+    notes: notes !== undefined ? notes : existing?.notes,
+    isFavorite: existing?.isFavorite ?? false,
+  };
+
+  await db.trackedAo3Works.put(trackedWork);
+
+  const hadNewChapters =
+    existing !== undefined && newPublished > previousPublished;
+
+  return { work: trackedWork, hadNewChapters };
+}
+
+// Tenta consultar o AO3 usando a ponte da Extensão instalada no navegador da usuária (sem bloqueio 525!)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function tryFetchViaExtensionBridge(urlOrId: string): Promise<any | null> {
+  if (typeof window === "undefined") return Promise.resolve(null);
+  const isExtInstalled =
+    document.documentElement.getAttribute("data-ao3-extension-installed") ===
+    "true";
+  if (!isExtInstalled) return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    const requestId = `req-${Date.now()}-${Math.random()}`;
+    const timeout = setTimeout(() => {
+      window.removeEventListener("message", handler);
+      resolve(null);
+    }, 8000);
+
+    const handler = (event: MessageEvent) => {
+      if (
+        event.data &&
+        event.data.type === "AO3_PERSONAL_FETCH_RESPONSE" &&
+        event.data.requestId === requestId
+      ) {
+        clearTimeout(timeout);
+        window.removeEventListener("message", handler);
+        if (event.data.ok && event.data.data) {
+          resolve(event.data.data);
+        } else {
+          resolve(null);
+        }
+      }
+    };
+
+    window.addEventListener("message", handler);
+    window.postMessage(
+      {
+        type: "AO3_PERSONAL_FETCH_REQUEST",
+        requestId,
+        urlOrId,
+      },
+      "*"
+    );
+  });
+}
+
+// Adiciona ou atualiza uma fanfic consultando primeiro via Extensão do Navegador e depois via /api/ao3-sync
 export async function addOrSyncTrackedWorkFromAo3Url(
   urlOrId: string,
   manualChaptersRead?: number,
   notes?: string
 ): Promise<{ work: AO3TrackedWork; hadNewChapters: boolean }> {
+  // 1. Tentar primeiro via Extensão do Navegador (roda direto na conexão residencial + cookies logados do AO3)
+  const extData = await tryFetchViaExtensionBridge(urlOrId);
+  if (extData) {
+    return saveTrackedWorkFromPayload(extData, manualChaptersRead, notes);
+  }
+
+  // 2. Consultar via rota /api/ao3-sync (com espelhos anti-525)
   const res = await fetch("/api/ao3-sync", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -27,55 +146,7 @@ export async function addOrSyncTrackedWorkFromAo3Url(
     );
   }
 
-  const id = `ao3-${data.ao3WorkId}`;
-  const existing = await db.trackedAo3Works.get(id);
-
-  const previousPublished = existing?.chaptersPublishedOnAo3 || 0;
-  const newPublished = data.chaptersPublishedOnAo3 || 1;
-
-  // Se o usuário informou manualmente em qual capítulo está, ou o link continha /chapters/XXXX, usa esse valor
-  const chaptersReadByMe =
-    manualChaptersRead !== undefined
-      ? manualChaptersRead
-      : data.detectedChapterNumber !== null &&
-        data.detectedChapterNumber !== undefined
-      ? data.detectedChapterNumber
-      : existing
-      ? existing.chaptersReadByMe
-      : Math.max(0, newPublished - 1);
-
-  const trackedWork: AO3TrackedWork = {
-    id,
-    ao3WorkId: data.ao3WorkId,
-    ao3Url: data.ao3Url,
-    title: data.title,
-    author: data.author,
-    fandoms: data.fandoms,
-    rating: data.rating,
-    category: data.category,
-    warningStatus: data.warningStatus,
-    completionStatus: data.completionStatus,
-    tags: data.tags,
-    summary: data.summary,
-    language: data.language,
-    wordCount: data.wordCount,
-    chaptersReadByMe: Math.min(chaptersReadByMe, newPublished),
-    chaptersPublishedOnAo3: newPublished,
-    chaptersTotalOnAo3: data.chaptersTotalOnAo3,
-    chapterLinks: data.chapterLinks || [],
-    ao3UpdatedAt: data.ao3UpdatedAt,
-    lastCheckedAt: new Date().toISOString(),
-    lastReadAt: existing?.lastReadAt,
-    notes: notes !== undefined ? notes : existing?.notes,
-    isFavorite: existing?.isFavorite ?? false,
-  };
-
-  await db.trackedAo3Works.put(trackedWork);
-
-  const hadNewChapters =
-    existing !== undefined && newPublished > previousPublished;
-
-  return { work: trackedWork, hadNewChapters };
+  return saveTrackedWorkFromPayload(data, manualChaptersRead, notes);
 }
 
 // Percorre todas as fanfics acompanhadas e consulta o AO3 Original para ver quais atualizaram!
@@ -92,17 +163,11 @@ export async function checkAllTrackedWorksOnAo3Original(
     try {
       const { work: synced, hadNewChapters } =
         await addOrSyncTrackedWorkFromAo3Url(w.ao3WorkId);
-      if (
-        hadNewChapters ||
-        synced.chaptersPublishedOnAo3 > synced.chaptersReadByMe
-      ) {
-        if (hadNewChapters) {
-          newlyUpdatedWorksCount++;
-          updatedTitles.push(synced.title);
-        }
+      if (hadNewChapters) {
+        newlyUpdatedWorksCount++;
+        updatedTitles.push(synced.title);
       }
     } catch {
-      // Se uma obra específica estiver offline/trancada, manter os dados atuais e continuar para a próxima
       await db.trackedAo3Works.update(w.id, {
         lastCheckedAt: new Date().toISOString(),
       });
