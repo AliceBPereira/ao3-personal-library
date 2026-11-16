@@ -2,12 +2,47 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --app-bg: #FAF6E8;
+  --app-surface: #F1EBCD;
+  --app-text: #2C2A25;
+  --app-muted: #656052;
+  --app-border: #E2DAC0;
+  --app-accent: #990000;
+}
+
 @layer base {
   body {
-    background-color: #ffffff;
-    color: #2a2a2a;
+    background-color: var(--app-bg);
+    color: var(--app-text);
     font-family: "Lucida Grande", "Lucida Sans Unicode", Verdana, Helvetica, sans-serif;
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
+}
+
+.theme-bg {
+  background-color: var(--app-bg) !important;
+  color: var(--app-text) !important;
+}
+
+.theme-surface {
+  background-color: var(--app-surface) !important;
+  color: var(--app-text) !important;
+  border-color: var(--app-border) !important;
+}
+
+.theme-card {
+  background-color: var(--app-bg) !important;
+  color: var(--app-text) !important;
+  border-color: var(--app-border) !important;
+}
+
+.theme-muted {
+  color: var(--app-muted) !important;
+}
+
+.theme-border {
+  border-color: var(--app-border) !important;
 }
 
 .reader-prose p {
@@ -35,7 +70,7 @@
 }
 
 .reader-prose blockquote {
-  border-left: 3px solid #990000;
+  border-left: 3px solid var(--app-accent);
   padding-left: 1rem;
   margin: 1rem 0;
   opacity: 0.92;

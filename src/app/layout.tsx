@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { OfflineServiceWorkerRegister } from "@/components/ao3/OfflineServiceWorkerRegister";
+import { GlobalThemeWrapper } from "@/components/ao3/GlobalThemeWrapper";
 
 export const metadata: Metadata = {
   title: "Arquivo de Nossa Autoria — Biblioteca Pessoal de Livros & Fanfics",
@@ -16,9 +17,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="pt-BR">
-      <body className="min-h-screen antialiased bg-white text-[#2a2a2a]">
+      <body className="min-h-screen antialiased">
         <OfflineServiceWorkerRegister />
-        {children}
+        <GlobalThemeWrapper>{children}</GlobalThemeWrapper>
       </body>
     </html>
   );

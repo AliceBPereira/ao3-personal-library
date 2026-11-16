@@ -10,7 +10,7 @@ import {
   formatReadingTime,
 } from "@/core/services/readingMetrics";
 import { useLibraryStore } from "@/store/useLibraryStore";
-import { useReaderStore } from "@/store/useReaderStore";
+import { READER_THEMES, useReaderStore } from "@/store/useReaderStore";
 import {
   BookOpen,
   Download,
@@ -40,12 +40,12 @@ export function WorkBlurbCard({
   onManageCollections,
 }: WorkBlurbCardProps) {
   const { toggleIncludeTag, includeTags, setActiveFandom } = useLibraryStore();
-  const { wpm } = useReaderStore();
+  const { wpm, theme } = useReaderStore();
+  const activeTheme = READER_THEMES[theme] || READER_THEMES.cream;
 
   const estimatedTime = formatReadingTime(work.wordCount, wpm);
   const workShelves = collections.filter((c) => work.collectionIds.includes(c.id));
 
-  // Construir a lista de tags em linha exatamente como no AO3, mas mantendo o estilo de cada categoria
   const warningTags = work.tags.warnings || [];
   const relationshipTags = work.tags.relationships || [];
   const characterTags = work.tags.characters || [];
@@ -62,7 +62,14 @@ export function WorkBlurbCard({
   ];
 
   return (
-    <article className="border border-[#dddddd] bg-white p-3 sm:p-4 mb-3 shadow-[0_1px_2px_rgba(0,0,0,0.03)] font-ao3Sans text-[13px] text-[#2a2a2a] transition-colors hover:border-[#bbbbbb]">
+    <article
+      className="border p-3 sm:p-4 mb-3 shadow-[0_1px_2px_rgba(0,0,0,0.04)] font-ao3Sans text-[13px] transition-colors"
+      style={{
+        backgroundColor: activeTheme.bg,
+        borderColor: activeTheme.border,
+        color: activeTheme.text,
+      }}
+    >
       {/* Cabeçalho do Card: Ícones 2x2 + Título/Autor/Fandoms + Data */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-2.5 min-w-0 flex-1">
@@ -75,35 +82,53 @@ export function WorkBlurbCard({
 
           <div className="min-w-0 flex-1">
             {/* Linha 1: Título por Autor */}
-            <h4 className="text-[15px] leading-snug font-normal text-[#2a2a2a] break-words">
+            <h4 className="text-[15px] leading-snug font-normal break-words">
               <Link
                 href={`/reader/${work.id}`}
-                className="text-[#990000] hover:bg-[#990000] hover:text-white underline decoration-[#990000]/60 transition-colors px-0.5 -mx-0.5 font-medium"
+                className="underline transition-colors px-0.5 -mx-0.5 font-medium hover:opacity-80"
+                style={{ color: activeTheme.accent }}
               >
                 {work.title}
               </Link>{" "}
-              <span className="text-[#444444]">por</span>{" "}
+              <span style={{ color: activeTheme.muted }}>por</span>{" "}
               <button
                 type="button"
-                onClick={() => useLibraryStore.getState().setSearchQuery(work.author)}
-                className="text-[#990000] hover:bg-[#990000] hover:text-white underline decoration-[#990000]/60 transition-colors px-0.5"
+                onClick={() =>
+                  useLibraryStore.getState().setSearchQuery(work.author)
+                }
+                className="underline transition-colors px-0.5 hover:opacity-80"
+                style={{ color: activeTheme.accent }}
                 title={`Filtrar obras de ${work.author}`}
               >
                 {work.author}
               </button>
-              <span className="ml-2 inline-block text-[10px] uppercase tracking-wider px-1.5 py-0.2 bg-[#f0f0f0] border border-[#ccc] text-[#555] rounded-sm align-middle">
+              <span
+                className="ml-2 inline-block text-[10px] uppercase tracking-wider px-1.5 py-0.2 border rounded-sm align-middle"
+                style={{
+                  backgroundColor: activeTheme.surface,
+                  borderColor: activeTheme.border,
+                  color: activeTheme.muted,
+                }}
+              >
                 {work.format.toUpperCase()}
               </span>
             </h4>
 
             {/* Linha 2: Fandoms */}
-            <h5 className="text-[12.5px] leading-snug mt-0.5 text-[#333333]">
+            <h5
+              className="text-[12.5px] leading-snug mt-0.5"
+              style={{ color: activeTheme.muted }}
+            >
               {work.fandoms.map((fandom, idx) => (
                 <React.Fragment key={`${fandom}-${idx}`}>
                   <button
                     type="button"
                     onClick={() => setActiveFandom(fandom)}
-                    className="border-b border-dotted border-[#555555] hover:bg-[#990000] hover:text-white hover:border-solid transition-colors text-left"
+                    className="border-b border-dotted hover:opacity-80 transition-opacity text-left"
+                    style={{
+                      borderColor: activeTheme.muted,
+                      color: activeTheme.text,
+                    }}
                   >
                     {fandom}
                   </button>
@@ -115,42 +140,44 @@ export function WorkBlurbCard({
         </div>
 
         {/* Canto Superior Direito: Data de atualização */}
-        <div className="text-[11px] text-[#555555] whitespace-nowrap font-mono shrink-0">
+        <div
+          className="text-[11px] whitespace-nowrap font-mono shrink-0"
+          style={{ color: activeTheme.muted }}
+        >
           {formatDateAO3(work.updatedAt)}
         </div>
       </div>
 
-      {/* Sistema de Tags em Destaque (Coração do App) */}
+      {/* Sistema de Tags em Destaque */}
       <div className="mt-2.5 leading-[1.65] text-[12.5px] break-words">
         {allTagEntries.map((entry, idx) => {
           const isSelected = includeTags.includes(entry.text);
-          let tagStyle =
-            "border-b border-dotted border-[#444444] text-[#111111] hover:bg-[#990000] hover:text-white cursor-pointer transition-colors";
-
-          if (entry.type === "warning") {
-            tagStyle =
-              "font-bold border-b border-dotted border-[#222222] text-[#111111] hover:bg-[#990000] hover:text-white cursor-pointer transition-colors";
-          } else if (entry.type === "relationship") {
-            tagStyle =
-              "bg-[#eeeeee] px-1 py-[1px] border-b border-dotted border-[#333333] text-[#111111] hover:bg-[#990000] hover:text-white cursor-pointer transition-colors";
-          }
-
-          if (isSelected) {
-            tagStyle += " !bg-[#990000] !text-white px-1";
-          }
+          const isRelationship = entry.type === "relationship";
+          const isWarning = entry.type === "warning";
 
           return (
             <React.Fragment key={`${entry.type}-${entry.text}-${idx}`}>
               <button
                 type="button"
                 onClick={() => toggleIncludeTag(entry.text)}
-                className={`${tagStyle} inline text-left`}
+                className={`inline text-left border-b border-dotted transition-colors cursor-pointer ${
+                  isWarning ? "font-bold" : ""
+                } ${isRelationship ? "px-1 py-[1px] rounded-[2px]" : ""}`}
+                style={{
+                  backgroundColor: isSelected
+                    ? activeTheme.accent
+                    : isRelationship
+                    ? activeTheme.surface
+                    : "transparent",
+                  color: isSelected ? "#ffffff" : activeTheme.text,
+                  borderColor: activeTheme.muted,
+                }}
                 title={`Clique para filtrar pela tag (${entry.type}): ${entry.text}`}
               >
                 {entry.text}
               </button>
               {idx < allTagEntries.length - 1 && (
-                <span className="text-[#444444]">, </span>
+                <span style={{ color: activeTheme.muted }}>, </span>
               )}
             </React.Fragment>
           );
@@ -158,7 +185,13 @@ export function WorkBlurbCard({
       </div>
 
       {/* Sinopse */}
-      <blockquote className="mt-3 mb-3 text-[13px] leading-[1.55] text-[#2a2a2a] space-y-2 pl-0">
+      <blockquote
+        className="mt-3 mb-3 text-[13px] leading-[1.55] space-y-2 pl-2.5 border-l-2"
+        style={{
+          color: activeTheme.text,
+          borderColor: activeTheme.border,
+        }}
+      >
         {work.summary.split("\n\n").map((paragraph, pIdx) => (
           <p key={pIdx} className="whitespace-pre-line">
             {paragraph}
@@ -166,9 +199,12 @@ export function WorkBlurbCard({
         ))}
       </blockquote>
 
-      {/* Prateleiras / Coleções Pessoais + Barra de Progresso se iniciada */}
+      {/* Prateleiras / Coleções Pessoais + Barra de Progresso */}
       {(workShelves.length > 0 || work.readingProgress?.scrollPercentage > 0) && (
-        <div className="flex flex-wrap items-center justify-between gap-2 mt-2 pt-2 border-t border-dashed border-[#e5e5e5] text-[11.5px]">
+        <div
+          className="flex flex-wrap items-center justify-between gap-2 mt-2 pt-2 border-t border-dashed text-[11.5px]"
+          style={{ borderColor: activeTheme.border }}
+        >
           <div className="flex flex-wrap items-center gap-1.5">
             {workShelves.map((shelf) => (
               <button
@@ -177,7 +213,12 @@ export function WorkBlurbCard({
                 onClick={() =>
                   useLibraryStore.getState().setActiveCollectionId(shelf.id)
                 }
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm bg-[#f7f7f7] border border-[#d4d4d4] text-[#444] hover:border-[#990000] hover:text-[#990000] transition-colors"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm border transition-colors"
+                style={{
+                  backgroundColor: activeTheme.surface,
+                  borderColor: activeTheme.border,
+                  color: activeTheme.text,
+                }}
               >
                 <span
                   className="w-2 h-2 rounded-full"
@@ -189,18 +230,28 @@ export function WorkBlurbCard({
           </div>
 
           {work.readingProgress?.scrollPercentage > 0 && (
-            <div className="flex items-center gap-2 text-[#555]">
+            <div
+              className="flex items-center gap-2"
+              style={{ color: activeTheme.muted }}
+            >
               <span>
                 Progresso:{" "}
-                <strong className="text-[#990000]">
+                <strong style={{ color: activeTheme.accent }}>
                   {Math.round(work.readingProgress.scrollPercentage)}%
                 </strong>{" "}
                 (Cap. {work.readingProgress.currentChapterIndex + 1})
               </span>
-              <div className="w-20 h-1.5 bg-[#eee] border border-[#ccc] overflow-hidden">
+              <div
+                className="w-20 h-1.5 border overflow-hidden"
+                style={{
+                  backgroundColor: activeTheme.surface,
+                  borderColor: activeTheme.border,
+                }}
+              >
                 <div
-                  className="h-full bg-[#990000]"
+                  className="h-full"
                   style={{
+                    backgroundColor: activeTheme.accent,
                     width: `${Math.min(
                       100,
                       Math.round(work.readingProgress.scrollPercentage)
@@ -214,12 +265,18 @@ export function WorkBlurbCard({
       )}
 
       {/* Rodapé de Metadados + Ações Rápidas */}
-      <div className="mt-2.5 pt-2 border-t border-[#eeeeee] flex flex-wrap items-center justify-between gap-3 text-[12px] text-[#444444]">
-        {/* Botões de Ação Pessoal */}
+      <div
+        className="mt-2.5 pt-2 border-t flex flex-wrap items-center justify-between gap-3 text-[12px]"
+        style={{
+          borderColor: activeTheme.border,
+          color: activeTheme.muted,
+        }}
+      >
         <div className="flex flex-wrap items-center gap-1.5">
           <Link
             href={`/reader/${work.id}`}
-            className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#990000] text-white hover:bg-[#700000] rounded-sm text-[11.5px] font-medium transition-colors"
+            className="inline-flex items-center gap-1 px-2.5 py-1 text-white rounded-sm text-[11.5px] font-medium transition-opacity hover:opacity-90"
+            style={{ backgroundColor: activeTheme.accent }}
           >
             <BookOpen className="w-3.5 h-3.5" />
             {work.readingProgress?.scrollPercentage > 0 &&
@@ -231,8 +288,12 @@ export function WorkBlurbCard({
           <button
             type="button"
             onClick={() => onEdit(work)}
-            className="inline-flex items-center gap-1 px-2 py-1 bg-[#f3f3f3] hover:bg-[#e4e4e4] border border-[#cccccc] text-[#333] rounded-sm text-[11.5px] transition-colors"
-            title="Editar Tags, Sinopse e Metadados"
+            className="inline-flex items-center gap-1 px-2 py-1 border rounded-sm text-[11.5px] transition-opacity hover:opacity-80"
+            style={{
+              backgroundColor: activeTheme.surface,
+              borderColor: activeTheme.border,
+              color: activeTheme.text,
+            }}
           >
             <Edit3 className="w-3.5 h-3.5" />
             Editar Tags
@@ -241,8 +302,12 @@ export function WorkBlurbCard({
           <button
             type="button"
             onClick={() => onManageCollections(work)}
-            className="inline-flex items-center gap-1 px-2 py-1 bg-[#f3f3f3] hover:bg-[#e4e4e4] border border-[#cccccc] text-[#333] rounded-sm text-[11.5px] transition-colors"
-            title="Adicionar ou remover de Prateleiras/Coleções"
+            className="inline-flex items-center gap-1 px-2 py-1 border rounded-sm text-[11.5px] transition-opacity hover:opacity-80"
+            style={{
+              backgroundColor: activeTheme.surface,
+              borderColor: activeTheme.border,
+              color: activeTheme.text,
+            }}
           >
             <FolderPlus className="w-3.5 h-3.5" />
             Prateleiras
@@ -251,8 +316,12 @@ export function WorkBlurbCard({
           <button
             type="button"
             onClick={() => onExport(work)}
-            className="inline-flex items-center gap-1 px-2 py-1 bg-[#f3f3f3] hover:bg-[#e4e4e4] border border-[#cccccc] text-[#333] rounded-sm text-[11.5px] transition-colors"
-            title="Exportar livro, tags e anotações"
+            className="inline-flex items-center gap-1 px-2 py-1 border rounded-sm text-[11.5px] transition-opacity hover:opacity-80"
+            style={{
+              backgroundColor: activeTheme.surface,
+              borderColor: activeTheme.border,
+              color: activeTheme.text,
+            }}
           >
             <Download className="w-3.5 h-3.5" />
             Exportar
@@ -261,7 +330,8 @@ export function WorkBlurbCard({
           <button
             type="button"
             onClick={() => onDelete(work)}
-            className="inline-flex items-center gap-1 px-1.5 py-1 text-[#777] hover:text-[#990000] transition-colors"
+            className="inline-flex items-center gap-1 px-1.5 py-1 hover:opacity-100 opacity-70 transition-opacity"
+            style={{ color: activeTheme.accent }}
             title="Remover obra da biblioteca"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -271,21 +341,24 @@ export function WorkBlurbCard({
         {/* Estatísticas estilo AO3 alinhadas à direita */}
         <dl className="flex flex-wrap items-center gap-x-3 gap-y-1 ml-auto text-[12px]">
           <div className="inline-flex gap-1">
-            <dt className="text-[#555]">Idioma:</dt>
-            <dd className="text-[#222]">{work.language}</dd>
+            <dt>Idioma:</dt>
+            <dd style={{ color: activeTheme.text }}>{work.language}</dd>
           </div>
 
           <div className="inline-flex gap-1">
-            <dt className="text-[#555]">Palavras:</dt>
-            <dd className="text-[#222]">{formatNumberPT(work.wordCount)}</dd>
+            <dt>Palavras:</dt>
+            <dd style={{ color: activeTheme.text }}>
+              {formatNumberPT(work.wordCount)}
+            </dd>
           </div>
 
           <div className="inline-flex gap-1">
-            <dt className="text-[#555]">Capítulos:</dt>
-            <dd className="text-[#222]">
+            <dt>Capítulos:</dt>
+            <dd style={{ color: activeTheme.text }}>
               <Link
                 href={`/reader/${work.id}`}
-                className="border-b border-dotted border-[#333] hover:bg-[#990000] hover:text-white"
+                className="border-b border-dotted"
+                style={{ borderColor: activeTheme.text }}
               >
                 {work.chaptersCurrent}
               </Link>
@@ -297,13 +370,21 @@ export function WorkBlurbCard({
             className="inline-flex gap-1"
             title={`Calculado a ${wpm} palavras por minuto`}
           >
-            <dt className="text-[#555]">Tempo estimado:</dt>
-            <dd className="font-medium text-[#990000]">{estimatedTime}</dd>
+            <dt>Tempo estimado:</dt>
+            <dd className="font-medium" style={{ color: activeTheme.accent }}>
+              {estimatedTime}
+            </dd>
           </div>
 
           <div className="inline-flex gap-1">
-            <dt className="text-[#555]">Destaques:</dt>
-            <dd className="border-b border-dotted border-[#333]">
+            <dt>Destaques:</dt>
+            <dd
+              className="border-b border-dotted"
+              style={{
+                color: activeTheme.text,
+                borderColor: activeTheme.muted,
+              }}
+            >
               {work.stats?.highlightsCount || 0}
             </dd>
           </div>
@@ -312,15 +393,25 @@ export function WorkBlurbCard({
             <button
               type="button"
               onClick={() => onToggleKudos(work)}
-              className={`inline-flex items-center gap-1 border-b border-dotted border-[#333] hover:text-[#990000] ${
-                work.stats?.kudosGiven ? "text-[#990000] font-semibold" : ""
-              }`}
-              title="Marcar/Desmarcar Kudos (Favorito)"
+              className="inline-flex items-center gap-1 border-b border-dotted"
+              style={{
+                borderColor: activeTheme.muted,
+                color: work.stats?.kudosGiven
+                  ? activeTheme.accent
+                  : activeTheme.text,
+                fontWeight: work.stats?.kudosGiven ? 600 : 400,
+              }}
             >
               <Heart
-                className={`w-3 h-3 ${
-                  work.stats?.kudosGiven ? "fill-[#990000] text-[#990000]" : ""
-                }`}
+                className="w-3 h-3"
+                style={{
+                  fill: work.stats?.kudosGiven
+                    ? activeTheme.accent
+                    : "transparent",
+                  color: work.stats?.kudosGiven
+                    ? activeTheme.accent
+                    : "currentColor",
+                }}
               />
               <span>Favorito:</span>
               <span>{work.stats?.kudosGiven ? "Sim" : "Não"}</span>
@@ -328,8 +419,10 @@ export function WorkBlurbCard({
           </div>
 
           <div className="inline-flex gap-1">
-            <dt className="text-[#555]">Leituras:</dt>
-            <dd className="text-[#222]">{work.stats?.rereadCount || 0}</dd>
+            <dt>Leituras:</dt>
+            <dd style={{ color: activeTheme.text }}>
+              {work.stats?.rereadCount || 0}
+            </dd>
           </div>
         </dl>
       </div>

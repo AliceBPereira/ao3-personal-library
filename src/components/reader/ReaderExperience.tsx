@@ -697,9 +697,9 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
         color: activeTheme.text,
       }}
     >
-      {/* ================= BARRA SUPERIOR DO LEITOR ================= */}
+      {/* ================= BARRA SUPERIOR DO LEITOR (FIXA E SEMPRE ACESSÍVEL EM QUALQUER SCROLL) ================= */}
       <header
-        className="shrink-0 z-30 border-b px-3 sm:px-6 py-2 transition-colors shadow-sm"
+        className="sticky top-0 left-0 right-0 shrink-0 z-40 border-b px-3 sm:px-6 py-2 transition-all shadow-sm"
         style={{
           backgroundColor: activeTheme.surface,
           borderColor: activeTheme.border,
@@ -1482,7 +1482,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
       {/* ================= RODAPÉ DE PÁGINA E MÉTRICAS EM TEMPO REAL ================= */}
       <footer
-        className="shrink-0 z-20 border-t px-4 py-1.5 font-ao3Sans text-[11.5px]"
+        className="sticky bottom-0 left-0 right-0 shrink-0 z-30 border-t px-4 py-1.5 font-ao3Sans text-[11.5px]"
         style={{
           backgroundColor: activeTheme.surface,
           borderColor: activeTheme.border,

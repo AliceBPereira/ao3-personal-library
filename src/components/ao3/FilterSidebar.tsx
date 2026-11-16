@@ -2,6 +2,7 @@
 
 import React from "react";
 import { useLibraryStore } from "@/store/useLibraryStore";
+import { READER_THEMES, useReaderStore } from "@/store/useReaderStore";
 import {
   computeFacetCounts,
   SortFieldAO3,
@@ -50,9 +51,14 @@ const COMPLETION_LABELS: Array<{ id: CompletionStatusAO3; label: string }> = [
 
 export function FilterSidebar({ allWorks }: FilterSidebarProps) {
   const store = useLibraryStore();
+  const { theme } = useReaderStore();
+  const activeTheme = READER_THEMES[theme] || READER_THEMES.cream;
+
   const facets = React.useMemo(() => computeFacetCounts(allWorks), [allWorks]);
 
-  const [openSections, setOpenSections] = React.useState<Record<string, boolean>>({
+  const [openSections, setOpenSections] = React.useState<
+    Record<string, boolean>
+  >({
     inc_ratings: false,
     inc_warnings: false,
     inc_categories: false,
@@ -79,12 +85,17 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
       <button
         type="button"
         onClick={() => toggleSection(key)}
-        className="w-full flex items-center gap-1.5 py-1.5 px-2 text-left text-[12.5px] text-[#222222] bg-[#e2e2e2] hover:bg-[#d8d8d8] border-b border-[#cccccc] transition-colors"
+        className="w-full flex items-center gap-1.5 py-1.5 px-2 text-left text-[12.5px] border-b transition-opacity hover:opacity-85"
+        style={{
+          backgroundColor: activeTheme.surface,
+          color: activeTheme.text,
+          borderColor: activeTheme.border,
+        }}
       >
         {isOpen ? (
-          <ChevronDown className="w-3.5 h-3.5 text-[#555] shrink-0" />
+          <ChevronDown className="w-3.5 h-3.5 shrink-0" />
         ) : (
-          <ChevronRight className="w-3.5 h-3.5 text-[#555] shrink-0" />
+          <ChevronRight className="w-3.5 h-3.5 shrink-0" />
         )}
         <span>{label}</span>
       </button>
@@ -92,25 +103,41 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
   };
 
   return (
-    <aside className="w-full lg:w-[270px] shrink-0 bg-[#eeeeee] border border-[#cccccc] p-3 font-ao3Sans text-[12.5px] text-[#2a2a2a] self-start">
-      {/* Botão Topo Estilo AO3 */}
+    <aside
+      className="w-full lg:w-[270px] shrink-0 border p-3 font-ao3Sans text-[12.5px] self-start transition-colors"
+      style={{
+        backgroundColor: activeTheme.surface,
+        borderColor: activeTheme.border,
+        color: activeTheme.text,
+      }}
+    >
       <button
         type="button"
         onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-        className="w-full py-1 px-3 mb-3 bg-gradient-to-b from-[#ffffff] to-[#dddddd] border border-[#bbbbbb] rounded-sm text-[#222] font-medium text-[12.5px] shadow-sm hover:from-[#f5f5f5] hover:to-[#cccccc]"
+        className="w-full py-1 px-3 mb-3 border rounded-sm font-medium text-[12.5px] shadow-sm transition-opacity hover:opacity-90"
+        style={{
+          backgroundColor: activeTheme.bg,
+          borderColor: activeTheme.border,
+          color: activeTheme.text,
+        }}
       >
         Classificar e Filtrar
       </button>
 
       {/* Classificar por */}
       <div className="mb-4">
-        <label className="block text-[12px] text-[#333] mb-1 font-medium">
+        <label className="block text-[12px] mb-1 font-medium">
           Classificar por
         </label>
         <select
           value={store.sortBy}
           onChange={(e) => store.setSortBy(e.target.value as SortFieldAO3)}
-          className="w-full bg-white border border-[#aaaaaa] px-2 py-1 text-[12px] text-[#222] rounded-sm focus:outline-none focus:border-[#990000]"
+          className="w-full border px-2 py-1 text-[12px] rounded-sm focus:outline-none"
+          style={{
+            backgroundColor: activeTheme.bg,
+            borderColor: activeTheme.border,
+            color: activeTheme.text,
+          }}
         >
           <option value="updatedAt">Data da atualização</option>
           <option value="wordCount">Contagem de palavras</option>
@@ -122,11 +149,18 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
 
       {/* ================= INCLUIR ================= */}
       <div className="mb-4">
-        <div className="flex items-center justify-between border-b border-[#bbbbbb] pb-1 mb-1.5">
-          <h4 className="text-[14px] font-serif text-[#222]">
+        <div
+          className="flex items-center justify-between border-b pb-1 mb-1.5"
+          style={{ borderColor: activeTheme.border }}
+        >
+          <h4 className="text-[14px] font-serif">
             Incluir{" "}
             <span
-              className="inline-flex items-center justify-center w-4 h-4 text-[10px] rounded-full bg-[#d0e3f0] text-[#1d5c88] border border-[#8ab4d0] cursor-help"
+              className="inline-flex items-center justify-center w-4 h-4 text-[10px] rounded-full border cursor-help"
+              style={{
+                backgroundColor: activeTheme.bg,
+                borderColor: activeTheme.border,
+              }}
               title="Selecione tags ou classificações que as obras DEVEM conter."
             >
               ?
@@ -134,12 +168,17 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
           </h4>
         </div>
 
-        <div className="border border-[#cccccc] bg-[#f7f7f7] divide-y divide-[#cccccc]">
-          {/* Avaliações (Incluir) */}
+        <div
+          className="border divide-y"
+          style={{
+            backgroundColor: activeTheme.bg,
+            borderColor: activeTheme.border,
+          }}
+        >
           <div>
             {renderAccordionHeader("inc_ratings", "avaliações")}
             {openSections.inc_ratings && (
-              <div className="p-2 space-y-1 bg-white">
+              <div className="p-2 space-y-1">
                 {RATING_LABELS.map((r) => (
                   <label
                     key={r.id}
@@ -158,11 +197,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             )}
           </div>
 
-          {/* Avisos (Incluir) */}
           <div>
             {renderAccordionHeader("inc_warnings", "avisos")}
             {openSections.inc_warnings && (
-              <div className="p-2 space-y-1 bg-white">
+              <div className="p-2 space-y-1">
                 {WARNING_LABELS.map((w) => (
                   <label
                     key={w.id}
@@ -181,11 +219,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             )}
           </div>
 
-          {/* Categorias (Incluir) */}
           <div>
             {renderAccordionHeader("inc_categories", "categorias")}
             {openSections.inc_categories && (
-              <div className="p-2 space-y-1 bg-white">
+              <div className="p-2 space-y-1">
                 {CATEGORY_LABELS.map((c) => (
                   <label
                     key={c.id}
@@ -204,11 +241,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             )}
           </div>
 
-          {/* Fandoms (Incluir) */}
           <div>
             {renderAccordionHeader("inc_fandoms", "fandoms")}
             {openSections.inc_fandoms && (
-              <div className="p-2 space-y-1 bg-white max-h-40 overflow-y-auto">
+              <div className="p-2 space-y-1 max-h-40 overflow-y-auto">
                 {facets.fandoms.map((f) => (
                   <label
                     key={f.name}
@@ -221,7 +257,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
                       className="mt-0.5 accent-[#990000]"
                     />
                     <span>
-                      {f.name} <span className="text-[#666]">({f.count})</span>
+                      {f.name}{" "}
+                      <span style={{ color: activeTheme.muted }}>
+                        ({f.count})
+                      </span>
                     </span>
                   </label>
                 ))}
@@ -229,11 +268,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             )}
           </div>
 
-          {/* Personagens (Incluir) */}
           <div>
             {renderAccordionHeader("inc_characters", "personagens")}
             {openSections.inc_characters && (
-              <div className="p-2 space-y-1 bg-white max-h-44 overflow-y-auto">
+              <div className="p-2 space-y-1 max-h-44 overflow-y-auto">
                 {facets.characters.map((c) => (
                   <label
                     key={c.name}
@@ -246,7 +284,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
                       className="mt-0.5 accent-[#990000]"
                     />
                     <span>
-                      {c.name} <span className="text-[#666]">({c.count})</span>
+                      {c.name}{" "}
+                      <span style={{ color: activeTheme.muted }}>
+                        ({c.count})
+                      </span>
                     </span>
                   </label>
                 ))}
@@ -254,11 +295,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             )}
           </div>
 
-          {/* Relacionamentos (Incluir) */}
           <div>
             {renderAccordionHeader("inc_relationships", "relacionamentos")}
             {openSections.inc_relationships && (
-              <div className="p-2 space-y-1 bg-white max-h-44 overflow-y-auto">
+              <div className="p-2 space-y-1 max-h-44 overflow-y-auto">
                 {facets.relationships.map((rel) => (
                   <label
                     key={rel.name}
@@ -271,7 +311,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
                       className="mt-0.5 accent-[#990000]"
                     />
                     <span>
-                      {rel.name} <span className="text-[#666]">({rel.count})</span>
+                      {rel.name}{" "}
+                      <span style={{ color: activeTheme.muted }}>
+                        ({rel.count})
+                      </span>
                     </span>
                   </label>
                 ))}
@@ -279,11 +322,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             )}
           </div>
 
-          {/* Tags Adicionais (Incluir) */}
           <div>
             {renderAccordionHeader("inc_freeforms", "tags adicionais")}
             {openSections.inc_freeforms && (
-              <div className="p-2 space-y-1 bg-white max-h-48 overflow-y-auto">
+              <div className="p-2 space-y-1 max-h-48 overflow-y-auto">
                 {facets.freeforms.map((tag) => (
                   <label
                     key={tag.name}
@@ -296,7 +338,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
                       className="mt-0.5 accent-[#990000]"
                     />
                     <span>
-                      {tag.name} <span className="text-[#666]">({tag.count})</span>
+                      {tag.name}{" "}
+                      <span style={{ color: activeTheme.muted }}>
+                        ({tag.count})
+                      </span>
                     </span>
                   </label>
                 ))}
@@ -306,7 +351,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
         </div>
 
         <div className="mt-2">
-          <label className="block text-[11.5px] text-[#444] mb-1">
+          <label
+            className="block text-[11.5px] mb-1"
+            style={{ color: activeTheme.muted }}
+          >
             Outras etiquetas a incluir (separadas por vírgula)
           </label>
           <input
@@ -314,18 +362,30 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             value={store.customIncludeInput}
             onChange={(e) => store.setCustomIncludeInput(e.target.value)}
             placeholder="Ex: Fluff, Humor, Russo"
-            className="w-full bg-white border border-[#bbbbbb] px-2 py-1 text-[12px] focus:outline-none focus:border-[#990000]"
+            className="w-full border px-2 py-1 text-[12px] focus:outline-none"
+            style={{
+              backgroundColor: activeTheme.bg,
+              borderColor: activeTheme.border,
+              color: activeTheme.text,
+            }}
           />
         </div>
       </div>
 
       {/* ================= EXCLUIR ================= */}
       <div className="mb-4">
-        <div className="flex items-center justify-between border-b border-[#bbbbbb] pb-1 mb-1.5">
-          <h4 className="text-[14px] font-serif text-[#222]">
+        <div
+          className="flex items-center justify-between border-b pb-1 mb-1.5"
+          style={{ borderColor: activeTheme.border }}
+        >
+          <h4 className="text-[14px] font-serif">
             Excluir{" "}
             <span
-              className="inline-flex items-center justify-center w-4 h-4 text-[10px] rounded-full bg-[#d0e3f0] text-[#1d5c88] border border-[#8ab4d0] cursor-help"
+              className="inline-flex items-center justify-center w-4 h-4 text-[10px] rounded-full border cursor-help"
+              style={{
+                backgroundColor: activeTheme.bg,
+                borderColor: activeTheme.border,
+              }}
               title="Selecione tags ou classificações que você NÃO quer ver nos resultados."
             >
               ?
@@ -333,12 +393,17 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
           </h4>
         </div>
 
-        <div className="border border-[#cccccc] bg-[#f7f7f7] divide-y divide-[#cccccc]">
-          {/* Classificações (Excluir) */}
+        <div
+          className="border divide-y"
+          style={{
+            backgroundColor: activeTheme.bg,
+            borderColor: activeTheme.border,
+          }}
+        >
           <div>
             {renderAccordionHeader("exc_ratings", "classificações")}
             {openSections.exc_ratings && (
-              <div className="p-2 space-y-1 bg-white">
+              <div className="p-2 space-y-1">
                 {RATING_LABELS.map((r) => (
                   <label
                     key={r.id}
@@ -357,11 +422,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             )}
           </div>
 
-          {/* Avisos (Excluir) */}
           <div>
             {renderAccordionHeader("exc_warnings", "avisos")}
             {openSections.exc_warnings && (
-              <div className="p-2 space-y-1 bg-white">
+              <div className="p-2 space-y-1">
                 {WARNING_LABELS.map((w) => (
                   <label
                     key={w.id}
@@ -380,11 +444,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             )}
           </div>
 
-          {/* Categorias (Excluir) */}
           <div>
             {renderAccordionHeader("exc_categories", "categorias")}
             {openSections.exc_categories && (
-              <div className="p-2 space-y-1 bg-white">
+              <div className="p-2 space-y-1">
                 {CATEGORY_LABELS.map((c) => (
                   <label
                     key={c.id}
@@ -403,11 +466,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             )}
           </div>
 
-          {/* Fandoms (Excluir) */}
           <div>
             {renderAccordionHeader("exc_fandoms", "fandoms")}
             {openSections.exc_fandoms && (
-              <div className="p-2 space-y-1 bg-white max-h-40 overflow-y-auto">
+              <div className="p-2 space-y-1 max-h-40 overflow-y-auto">
                 {facets.fandoms.map((f) => (
                   <label
                     key={f.name}
@@ -420,7 +482,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
                       className="mt-0.5 accent-[#990000]"
                     />
                     <span>
-                      {f.name} <span className="text-[#666]">({f.count})</span>
+                      {f.name}{" "}
+                      <span style={{ color: activeTheme.muted }}>
+                        ({f.count})
+                      </span>
                     </span>
                   </label>
                 ))}
@@ -428,11 +493,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             )}
           </div>
 
-          {/* Personagens (Excluir) */}
           <div>
             {renderAccordionHeader("exc_characters", "personagens")}
             {openSections.exc_characters && (
-              <div className="p-2 space-y-1 bg-white max-h-44 overflow-y-auto">
+              <div className="p-2 space-y-1 max-h-44 overflow-y-auto">
                 {facets.characters.map((c) => (
                   <label
                     key={c.name}
@@ -445,7 +509,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
                       className="mt-0.5 accent-[#990000]"
                     />
                     <span>
-                      {c.name} <span className="text-[#666]">({c.count})</span>
+                      {c.name}{" "}
+                      <span style={{ color: activeTheme.muted }}>
+                        ({c.count})
+                      </span>
                     </span>
                   </label>
                 ))}
@@ -453,11 +520,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             )}
           </div>
 
-          {/* Relacionamentos (Excluir) */}
           <div>
             {renderAccordionHeader("exc_relationships", "relacionamentos")}
             {openSections.exc_relationships && (
-              <div className="p-2 space-y-1 bg-white max-h-44 overflow-y-auto">
+              <div className="p-2 space-y-1 max-h-44 overflow-y-auto">
                 {facets.relationships.map((rel) => (
                   <label
                     key={rel.name}
@@ -470,7 +536,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
                       className="mt-0.5 accent-[#990000]"
                     />
                     <span>
-                      {rel.name} <span className="text-[#666]">({rel.count})</span>
+                      {rel.name}{" "}
+                      <span style={{ color: activeTheme.muted }}>
+                        ({rel.count})
+                      </span>
                     </span>
                   </label>
                 ))}
@@ -478,11 +547,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             )}
           </div>
 
-          {/* Tags Adicionais (Excluir) */}
           <div>
             {renderAccordionHeader("exc_freeforms", "tags adicionais")}
             {openSections.exc_freeforms && (
-              <div className="p-2 space-y-1 bg-white max-h-48 overflow-y-auto">
+              <div className="p-2 space-y-1 max-h-48 overflow-y-auto">
                 {facets.freeforms.map((tag) => (
                   <label
                     key={tag.name}
@@ -495,7 +563,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
                       className="mt-0.5 accent-[#990000]"
                     />
                     <span>
-                      {tag.name} <span className="text-[#666]">({tag.count})</span>
+                      {tag.name}{" "}
+                      <span style={{ color: activeTheme.muted }}>
+                        ({tag.count})
+                      </span>
                     </span>
                   </label>
                 ))}
@@ -505,7 +576,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
         </div>
 
         <div className="mt-2">
-          <label className="block text-[11.5px] text-[#444] mb-1">
+          <label
+            className="block text-[11.5px] mb-1"
+            style={{ color: activeTheme.muted }}
+          >
             Outras tags a serem excluídas (separadas por vírgula)
           </label>
           <input
@@ -513,14 +587,22 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
             value={store.customExcludeInput}
             onChange={(e) => store.setCustomExcludeInput(e.target.value)}
             placeholder="Ex: Morte de personagem, Angst"
-            className="w-full bg-white border border-[#bbbbbb] px-2 py-1 text-[12px] focus:outline-none focus:border-[#990000]"
+            className="w-full border px-2 py-1 text-[12px] focus:outline-none"
+            style={{
+              backgroundColor: activeTheme.bg,
+              borderColor: activeTheme.border,
+              color: activeTheme.text,
+            }}
           />
         </div>
       </div>
 
-      {/* ================= MAIS OPÇÕES (Status & Contagem de Palavras) ================= */}
-      <div className="mb-4 pt-2 border-t border-[#cccccc]">
-        <h5 className="text-[12.5px] font-semibold text-[#333] mb-1.5">
+      {/* ================= MAIS OPÇÕES ================= */}
+      <div
+        className="mb-4 pt-2 border-t"
+        style={{ borderColor: activeTheme.border }}
+      >
+        <h5 className="text-[12.5px] font-semibold mb-1.5">
           Status de Conclusão
         </h5>
         <div className="space-y-1">
@@ -541,7 +623,10 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
         </div>
 
         <div className="mt-3">
-          <label className="block text-[11.5px] text-[#444] mb-1">
+          <label
+            className="block text-[11.5px] mb-1"
+            style={{ color: activeTheme.muted }}
+          >
             Contagem de palavras (De / Até)
           </label>
           <div className="grid grid-cols-2 gap-1.5">
@@ -555,7 +640,12 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
                   store.maxWords
                 )
               }
-              className="bg-white border border-[#bbbbbb] px-2 py-1 text-[12px]"
+              className="border px-2 py-1 text-[12px]"
+              style={{
+                backgroundColor: activeTheme.bg,
+                borderColor: activeTheme.border,
+                color: activeTheme.text,
+              }}
             />
             <input
               type="number"
@@ -567,17 +657,26 @@ export function FilterSidebar({ allWorks }: FilterSidebarProps) {
                   e.target.value ? Number(e.target.value) : null
                 )
               }
-              className="bg-white border border-[#bbbbbb] px-2 py-1 text-[12px]"
+              className="border px-2 py-1 text-[12px]"
+              style={{
+                backgroundColor: activeTheme.bg,
+                borderColor: activeTheme.border,
+                color: activeTheme.text,
+              }}
             />
           </div>
         </div>
       </div>
 
-      {/* Limpar Filtros */}
       <button
         type="button"
         onClick={() => store.resetAllFilters()}
-        className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 bg-white hover:bg-[#990000] hover:text-white border border-[#aaaaaa] rounded-sm text-[12px] font-medium transition-colors"
+        className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 border rounded-sm text-[12px] font-medium transition-opacity hover:opacity-85"
+        style={{
+          backgroundColor: activeTheme.bg,
+          borderColor: activeTheme.border,
+          color: activeTheme.text,
+        }}
       >
         <RotateCcw className="w-3.5 h-3.5" />
         Limpar Todos os Filtros
