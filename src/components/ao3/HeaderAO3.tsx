@@ -2,12 +2,15 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
+import { useLiveQuery } from "dexie-react-hooks";
+import { db } from "@/core/db/database";
 import { useLibraryStore } from "@/store/useLibraryStore";
 import { READER_THEMES, useReaderStore } from "@/store/useReaderStore";
 import { ReaderThemeId } from "@/types/work";
 import { SourceLangCode } from "@/core/services/offlineTranslator";
 import { exportEntireLibraryBackup } from "@/core/exporters/libraryExporter";
 import {
+  BellRing,
   BookPlus,
   DownloadCloud,
   FolderHeart,
@@ -37,6 +40,12 @@ export function HeaderAO3({
     setSourceLang,
   } = useReaderStore();
   const [showThemePicker, setShowThemePicker] = useState(false);
+
+  const trackedWorks =
+    useLiveQuery(() => db.trackedAo3Works.toArray(), []) || [];
+  const unreadUpdatedWorksCount = trackedWorks.filter(
+    (w) => w.chaptersPublishedOnAo3 > w.chaptersReadByMe
+  ).length;
 
   const activeTheme = READER_THEMES[theme] || READER_THEMES.cream;
 
@@ -287,6 +296,18 @@ export function HeaderAO3({
             >
               <Library className="w-3.5 h-3.5" />
               Todas as Obras
+            </Link>
+            <Link
+              href="/tracker"
+              className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-sm bg-white/15 hover:bg-white/25 font-semibold transition-colors"
+            >
+              <BellRing className="w-3.5 h-3.5" />
+              <span>Acompanhando no AO3</span>
+              {unreadUpdatedWorksCount > 0 && (
+                <span className="px-1.5 py-0.2 bg-[#f9e398] text-[#700000] font-bold text-[11px] rounded-full">
+                  {unreadUpdatedWorksCount} novas!
+                </span>
+              )}
             </Link>
             <button
               type="button"

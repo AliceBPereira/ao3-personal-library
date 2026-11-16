@@ -48,7 +48,7 @@ export interface HighlightItem {
   id: string;
   workId: string;
   chapterIndex: number;
-  pageNumber?: number; // Usado em PDF ou paginação
+  pageNumber?: number;
   selectedText: string;
   note?: string;
   color: "yellow" | "green" | "blue" | "pink" | "amber";
@@ -70,7 +70,7 @@ export interface BookmarkItem {
 export interface PinnedSpecialPage {
   id: string;
   workId: string;
-  title: string; // Ex: "Mapa de Terrasen", "Árvore Genealógica", "Glossário de Exy"
+  title: string;
   category: "map" | "family_tree" | "glossary" | "reference";
   chapterIndex: number;
   scrollPercentage: number;
@@ -81,10 +81,10 @@ export interface PinnedSpecialPage {
 }
 
 export interface WorkTags {
-  warnings: string[];       // Ex: ["O criador optou por não usar avisos de arquivo."]
-  relationships: string[];  // Ex: ["Neil Josten/Andrew Minyard"]
-  characters: string[];     // Ex: ["Neil Josten", "Andrew Minyard", "Kevin Day"]
-  freeforms: string[];      // Ex: ["Fluff", "Humor", "Universo Alternativo", "5+1 Coisas"]
+  warnings: string[];
+  relationships: string[];
+  characters: string[];
+  freeforms: string[];
 }
 
 export interface WorkItem {
@@ -101,29 +101,28 @@ export interface WorkItem {
   language: string;
   wordCount: number;
   chaptersCurrent: number;
-  chaptersTotal: number | null; // null = "?" (ex: 6/?)
-  updatedAt: string;            // ISO string
+  chaptersTotal: number | null;
+  updatedAt: string;
   createdAt: string;
   format: BookFileFormat;
-  collectionIds: string[];      // Prateleiras/Coleções
-  // Métricas pessoais e progresso
+  collectionIds: string[];
   readingProgress: {
     currentChapterIndex: number;
-    scrollPercentage: number;   // 0 a 100
+    scrollPercentage: number;
     currentPage?: number;
     totalPages?: number;
     wordsRead: number;
     lastReadAt?: string;
   };
   stats: {
-    rereadCount: number;        // Quantas vezes leu ("Visualizações/Leituras")
-    kudosGiven: boolean;        // Favorito/Kudos pessoal
-    personalRating?: number;    // 1 a 5
+    rereadCount: number;
+    kudosGiven: boolean;
+    personalRating?: number;
     bookmarksCount: number;
     highlightsCount: number;
   };
   chapters: WorkChapter[];
-  translatedChaptersPt?: WorkChapter[]; // Cache persistente offline da tradução neural completa
+  translatedChaptersPt?: WorkChapter[];
   translatedTitlePt?: string;
   translatedSummaryPt?: string;
   rawFileBlob?: Blob | ArrayBuffer;
@@ -137,4 +136,43 @@ export interface CollectionShelf {
   icon: string;
   color: string;
   createdAt: string;
+}
+
+// ============================================================================
+// SISTEMA DE ACOMPANHAMENTO DE ATUALIZAÇÕES DO AO3 ORIGINAL (SUBSCRIPTIONS TRACKER)
+// ============================================================================
+export interface AO3ChapterLinkItem {
+  number: number;        // Ex: 1, 2, 3...
+  ao3ChapterId?: string; // Ex: "61019344"
+  title: string;         // Ex: "1. Chapter 1"
+  publishedDate?: string;// Ex: "2020-06-29"
+  url: string;           // Ex: "https://archiveofourown.org/works/25000000/chapters/61019344"
+}
+
+export interface AO3TrackedWork {
+  id: string;                        // Ex: "ao3-25008295"
+  ao3WorkId: string;                 // ID numérico oficial da obra no AO3 Original
+  ao3Url: string;                    // URL principal no archiveofourown.org
+  title: string;
+  author: string;
+  fandoms: string[];
+  rating: RatingAO3;
+  category: CategoryAO3;
+  warningStatus: WarningStatusAO3;
+  completionStatus: CompletionStatusAO3;
+  tags: WorkTags;
+  summary: string;
+  language: string;
+  wordCount: number;
+  // Controle de Capítulos e Atualizações no AO3 Original:
+  chaptersReadByMe: number;          // Último capítulo que você já leu no AO3 Original
+  lastReadChapterUrl?: string;       // Link do último capítulo que você leu
+  chaptersPublishedOnAo3: number;    // Quantos capítulos estão publicados hoje no AO3 Original
+  chaptersTotalOnAo3: number | null; // Total planejado pelo autor (null = "?")
+  chapterLinks: AO3ChapterLinkItem[];// Lista real de capítulos no AO3 com link direto para cada capítulo!
+  ao3UpdatedAt: string;              // Data em que o autor atualizou a fic lá no AO3 Original
+  lastCheckedAt: string;             // Quando nosso sistema consultou o AO3 Original pela última vez
+  lastReadAt?: string;               // Quando você leu pela última vez
+  notes?: string;                    // Anotações rápidas (ex: "Parei na parte em que Neil chega em Gotham")
+  isFavorite?: boolean;
 }

@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
 import {
+  AO3TrackedWork,
   BookmarkItem,
   CollectionShelf,
   HighlightItem,
@@ -13,6 +14,7 @@ class AO3LibraryDatabase extends Dexie {
   highlights!: EntityTable<HighlightItem, "id">;
   bookmarks!: EntityTable<BookmarkItem, "id">;
   pinnedPages!: EntityTable<PinnedSpecialPage, "id">;
+  trackedAo3Works!: EntityTable<AO3TrackedWork, "id">;
 
   constructor() {
     super("AO3PersonalLibraryDB");
@@ -22,6 +24,14 @@ class AO3LibraryDatabase extends Dexie {
       highlights: "id, workId, chapterIndex, createdAt",
       bookmarks: "id, workId, chapterIndex, createdAt",
       pinnedPages: "id, workId, category, createdAt",
+    });
+    this.version(2).stores({
+      works: "id, title, author, rating, category, completionStatus, updatedAt, wordCount, format",
+      collections: "id, name, createdAt",
+      highlights: "id, workId, chapterIndex, createdAt",
+      bookmarks: "id, workId, chapterIndex, createdAt",
+      pinnedPages: "id, workId, category, createdAt",
+      trackedAo3Works: "id, ao3WorkId, title, author, ao3UpdatedAt, lastCheckedAt",
     });
   }
 }
@@ -533,5 +543,168 @@ export async function ensureDatabaseSeeded() {
         "Кролик (Coelho) • Идиот (Idiota) • Да или нет? (Sim ou não?) • Останься (Fique).",
       createdAt: new Date().toISOString(),
     });
+  }
+
+  // Semear exemplos de Fanfics Acompanhadas no AO3 Original caso a tabela esteja vazia
+  const trackedCount = await db.trackedAo3Works.count();
+  if (trackedCount === 0) {
+    const initialTracked: AO3TrackedWork[] = [
+      {
+        id: "ao3-24989932",
+        ao3WorkId: "24989932",
+        ao3Url: "https://archiveofourown.org/works/24989932",
+        title: "Neil Josten-Wayne",
+        author: "SerpentineLee",
+        fandoms: [
+          "Batman - All Media Types",
+          "All For The Game - Nora Sakavic",
+        ],
+        rating: "not_rated",
+        category: "gen",
+        warningStatus: "none",
+        completionStatus: "wip",
+        tags: {
+          warnings: ["Não se aplicam avisos de arquivo."],
+          relationships: [
+            "Neil Josten & Alfred Pennyworth",
+            "Neil Josten & Jason Todd",
+            "Neil Josten & Bruce Wayne",
+          ],
+          characters: [
+            "Neil Josten",
+            "Jason Todd",
+            "Bruce Wayne",
+            "Dick Grayson",
+            "Tim Drake (DCU)",
+          ],
+          freeforms: [
+            "Neil Josten em Gotham",
+            "Bruce Wayne adota Neil Josten",
+            "Jason Todd é o Capuz Vermelho",
+          ],
+        },
+        summary:
+          "O que aconteceria se a mãe de Neil morresse quando ele tivesse apenas 13 anos, resultando em sua mudança para Gotham, onde ele precisaria ser resgatado pelo Capuz Vermelho?",
+        language: "English",
+        wordCount: 5280,
+        chaptersReadByMe: 4,
+        chaptersPublishedOnAo3: 6,
+        chaptersTotalOnAo3: null,
+        chapterLinks: [
+          {
+            number: 1,
+            title: "Capítulo 1",
+            url: "https://archiveofourown.org/works/24989932/chapters/60505264",
+          },
+          {
+            number: 2,
+            title: "Capítulo 2",
+            url: "https://archiveofourown.org/works/24989932/chapters/60505264",
+          },
+          {
+            number: 3,
+            title: "Capítulo 3",
+            url: "https://archiveofourown.org/works/24989932/chapters/60505264",
+          },
+          {
+            number: 4,
+            title: "Capítulo 4 (Onde você parou)",
+            url: "https://archiveofourown.org/works/24989932/chapters/60505264",
+          },
+          {
+            number: 5,
+            title: "Capítulo 5 (NOVO - Não lido!)",
+            url: "https://archiveofourown.org/works/24989932",
+          },
+          {
+            number: 6,
+            title: "Capítulo 6 (NOVO - Não lido!)",
+            url: "https://archiveofourown.org/works/24989932",
+          },
+        ],
+        ao3UpdatedAt: "2026-11-14",
+        lastCheckedAt: new Date().toISOString(),
+        notes: "Parei quando o Jason levou o Neil para a Mansão Wayne pela primeira vez.",
+        isFavorite: true,
+      },
+      {
+        id: "ao3-27481486",
+        ao3WorkId: "27481486",
+        ao3Url: "https://archiveofourown.org/works/27481486",
+        title: "andrewnotfound followed you (Эндрюnotfound seguiu você) | andriel",
+        author: "ghostboyparty",
+        fandoms: ["All For The Game - Nora Sakavic"],
+        rating: "mature",
+        category: "mm",
+        warningStatus: "none",
+        completionStatus: "wip",
+        tags: {
+          warnings: ["Não se aplicam avisos de arquivo."],
+          relationships: [
+            "Neil Josten/Andrew Minyard",
+            "Kevin Day/Aaron Minyard",
+          ],
+          characters: ["Andrew Minyard", "Neil Josten", "Kevin Day"],
+          freeforms: [
+            "Ficção de mensagens de texto",
+            "Universo Alternativo - Sem Exy",
+            "Neil é um youtuber e Andrew deixa comentários para ele",
+          ],
+        },
+        summary:
+          "Neil Josten é um YouTuber de exploração urbana que desenvolve uma relação com Andrew Minyard depois que este demonstra interesse em Neil e seus vídeos.",
+        language: "English",
+        wordCount: 18420,
+        chaptersReadByMe: 7,
+        chaptersPublishedOnAo3: 10,
+        chaptersTotalOnAo3: 15,
+        chapterLinks: Array.from({ length: 10 }).map((_, idx) => ({
+          number: idx + 1,
+          title: `Capítulo ${idx + 1}`,
+          url: `https://archiveofourown.org/works/27481486`,
+        })),
+        ao3UpdatedAt: "2026-11-15",
+        lastCheckedAt: new Date().toISOString(),
+        notes: "Neil acabou de começar a aprender russo para responder os comentários do Andrew.",
+        isFavorite: true,
+      },
+      {
+        id: "ao3-31320512",
+        ao3WorkId: "31320512",
+        ao3Url: "https://archiveofourown.org/works/31320512",
+        title: "Maldito Neil Josten (Damn Neil Josten)",
+        author: "butitknewme",
+        fandoms: ["All For The Game - Nora Sakavic"],
+        rating: "general",
+        category: "mm",
+        warningStatus: "chose_not",
+        completionStatus: "complete",
+        tags: {
+          warnings: ["O criador optou por não usar avisos de arquivo."],
+          relationships: ["Neil Josten/Andrew Minyard"],
+          characters: ["Neil Josten", "Andrew Minyard", "Matt Boyd"],
+          freeforms: ["Neil Josten bêbado", "Fluff"],
+        },
+        summary:
+          "Neil fica bêbado com as raposas e pede permissão ('Sim ou não, Drew?') antes de abraçar Andrew.",
+        language: "English",
+        wordCount: 1006,
+        chaptersReadByMe: 1,
+        chaptersPublishedOnAo3: 1,
+        chaptersTotalOnAo3: 1,
+        chapterLinks: [
+          {
+            number: 1,
+            title: "Capítulo 1",
+            url: "https://archiveofourown.org/works/31320512",
+          },
+        ],
+        ao3UpdatedAt: "2021-05-18",
+        lastCheckedAt: new Date().toISOString(),
+        notes: "Já li completa!",
+        isFavorite: false,
+      },
+    ];
+    await db.trackedAo3Works.bulkPut(initialTracked);
   }
 }

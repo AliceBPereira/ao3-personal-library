@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "AO3 Personal Library — Rastreador de Fanfics & Atualizações",
+  "version": "1.0.0",
+  "description": "Adiciona botão dentro do Archive of Our Own (AO3) para acompanhar fanfics, capítulos lidos e atualizações diretamente no seu AO3 Personal Library.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://archiveofourown.org/*",
+    "https://*.archiveofourown.org/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://archiveofourown.org/works/*",
+        "https://*.archiveofourown.org/works/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
