@@ -31,13 +31,12 @@ function escapeXml(unsafe: string): string {
     .replace(/'/g, "&apos;");
 }
 
-// Converte qualquer HTML de capítulo em parágrafos literários XHTML 100% limpos (apenas o texto do livro, sem tags HTML sujas!)
-function convertChapterToCleanBookParagraphsXhtml(chapter: WorkChapter): string {
+// Extrai apenas os parágrafos literários limpos de um capítulo (sem tags HTML cruas ou sujas)
+export function extractCleanParagraphsList(chapter: WorkChapter): string[] {
   if (typeof DOMParser !== "undefined" && chapter.htmlContent) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(chapter.htmlContent, "text/html");
 
-    // Remover scripts, styles ou elementos de interface
     doc
       .querySelectorAll("script, style, nav, button, input")
       .forEach((el) => el.remove());
@@ -54,39 +53,37 @@ function convertChapterToCleanBookParagraphsXhtml(chapter: WorkChapter): string 
       for (const node of blockNodes) {
         const rawText = (node.textContent || "").replace(/\s+/g, " ").trim();
         if (!rawText) continue;
-        // Evitar repetir o título do capítulo se o primeiro elemento já for igual ao título
         if (
           cleanParagraphs.length === 0 &&
           rawText.toLowerCase() === chapter.title.trim().toLowerCase()
         ) {
           continue;
         }
-        cleanParagraphs.push(`    <p>${escapeXml(rawText)}</p>`);
+        cleanParagraphs.push(rawText);
       }
       if (cleanParagraphs.length > 0) {
-        return cleanParagraphs.join("\n");
+        return cleanParagraphs;
       }
     }
   }
 
-  // Fallback a partir do plainText puro
   const plain = (chapter.plainText || "")
     .replace(/<[^>]*>/g, " ")
     .trim();
 
-  const lines = plain
+  return plain
     .split(/\n+/)
     .map((l) => l.replace(/\s+/g, " ").trim())
     .filter(Boolean);
-
-  if (lines.length === 0) {
-    return `    <p></p>`;
-  }
-
-  return lines.map((line) => `    <p>${escapeXml(line)}</p>`).join("\n");
 }
 
-// Garante que o livro inteiro (título, sinopse e TODOS os capítulos) esteja traduzido para Português antes de exportar
+function convertChapterToCleanBookParagraphsXhtml(chapter: WorkChapter): string {
+  const paragraphs = extractCleanParagraphsList(chapter);
+  if (paragraphs.length === 0) return `    <p></p>`;
+  return paragraphs.map((p) => `    <p>${escapeXml(p)}</p>`).join("\n");
+}
+
+// Garante que o livro inteiro esteja traduzido para Português antes de exportar
 export async function ensureWorkFullyTranslatedForExport(
   work: WorkItem,
   sourceLang: SourceLangCode = "auto",
@@ -139,7 +136,9 @@ export async function ensureWorkFullyTranslatedForExport(
   };
 }
 
-// Exporta um arquivo .EPUB de livro verdadeiro (apenas o texto literário limpo, sem tags AO3 e sem código HTML aparente!)
+// ============================================================================
+// 1. EXPORTAR COMO .EPUB (E-book padrão limpo, apenas o texto do livro)
+// ============================================================================
 export async function exportWorkAsEpub(
   work: WorkItem,
   options?: {
@@ -157,11 +156,8 @@ export async function exportWorkAsEpub(
     : work;
 
   const zip = new JSZip();
-
-  // 1. mimetype precisa ser o primeiro arquivo e sem compressão (padrão IDPF EPUB)
   zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
 
-  // 2. META-INF/container.xml
   zip.folder("META-INF")?.file(
     "container.xml",
     `<?xml version="1.0" encoding="UTF-8"?>
@@ -174,7 +170,6 @@ export async function exportWorkAsEpub(
 
   const oebps = zip.folder("OEBPS")!;
 
-  // 3. Folha de estilo literária limpa (Tipografia de livro real)
   oebps.file(
     "style.css",
     `body {
@@ -220,7 +215,6 @@ p {
 `
   );
 
-  // 4. Página de Rosto Limpa (Apenas Título, Autor e Sinopse limpa se houver — sem quadro de tags!)
   const safeBookTitle = escapeXml(targetWork.title);
   const safeAuthor = escapeXml(targetWork.author);
   const cleanSynopsisParagraphs = (targetWork.summary || "")
@@ -263,7 +257,6 @@ p {
   const spineItems: string[] = [`<itemref idref="titlepage"/>`];
   const navPoints: string[] = [];
 
-  // 5. Gerar cada capítulo apenas com o texto limpo do livro
   targetWork.chapters.forEach((ch, idx) => {
     const fileName = `chapter_${idx + 1}.xhtml`;
     const itemId = `ch${idx + 1}`;
@@ -297,7 +290,6 @@ ${cleanParagraphsXhtml}
     );
   });
 
-  // 6. Sumário NCX (para navegação de capítulos no Kindle/Kobo/Leitores EPUB)
   oebps.file(
     "toc.ncx",
     `<?xml version="1.0" encoding="UTF-8"?>
@@ -315,7 +307,6 @@ ${navPoints.join("\n")}
 </ncx>`
   );
 
-  // 7. Manifesto OPF limpo (apenas metadados essenciais do livro)
   oebps.file(
     "content.opf",
     `<?xml version="1.0" encoding="UTF-8"?>
@@ -348,20 +339,113 @@ ${navPoints.join("\n")}
   );
 }
 
-// Exporta também como Texto Limpo de Livro se o usuário escolher .HTML ou .ZIP
-export async function exportWorkAsHtmlAO3(
-  work: WorkItem,
-  options?: {
-    exportTranslatedPt?: boolean;
-    sourceLang?: SourceLangCode;
-    onProgress?: (msg: string) => void;
-  }
-) {
-  // Por padrão, redirecionar para o EPUB limpo de livro conforme pedido pelo usuário
-  await exportWorkAsEpub(work, options);
+// ============================================================================
+// 2. EXPORTAR COMO .HTML (Livro HTML limpo, apenas o texto formatado para leitura)
+// ============================================================================
+export function generateCleanBookHtmlString(work: WorkItem): string {
+  const safeTitle = escapeXml(work.title);
+  const safeAuthor = escapeXml(work.author);
+
+  const synopsisHtml = (work.summary || "")
+    .replace(/<[^>]*>/g, " ")
+    .split(/\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => `<p>${escapeXml(s)}</p>`)
+    .join("\n      ");
+
+  const chaptersHtml = work.chapters
+    .map((ch, idx) => {
+      const chTitle = escapeXml(ch.title || `Capítulo ${idx + 1}`);
+      const paragraphs = extractCleanParagraphsList(ch)
+        .map((p) => `      <p>${escapeXml(p)}</p>`)
+        .join("\n");
+      return `    <section class="chapter" id="chapter-${idx + 1}">
+      <h2 class="title">${chTitle}</h2>
+      <div class="userstuff">
+${paragraphs}
+      </div>
+    </section>`;
+    })
+    .join("\n\n");
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="author" content="${safeAuthor}" />
+  <meta name="description" content="${escapeXml(work.summary || "")}" />
+  <title>${safeTitle}</title>
+  <style>
+    body {
+      font-family: Georgia, "Times New Roman", serif;
+      max-width: 720px;
+      margin: 48px auto;
+      padding: 0 24px;
+      color: #1a1a1a;
+      background-color: #faf6e8;
+      line-height: 1.75;
+      font-size: 18px;
+    }
+    .book-header {
+      text-align: center;
+      padding: 40px 0 32px;
+      border-bottom: 1px solid #d8cfb8;
+      margin-bottom: 40px;
+    }
+    h1.heading {
+      font-size: 2em;
+      margin: 0 0 8px;
+      color: #111;
+    }
+    .author {
+      font-size: 1.1em;
+      font-style: italic;
+      color: #555;
+    }
+    .summary {
+      margin-top: 24px;
+      font-size: 0.92em;
+      text-align: justify;
+      color: #333;
+    }
+    .chapter {
+      margin-bottom: 56px;
+      page-break-before: always;
+    }
+    .chapter h2.title {
+      text-align: center;
+      font-size: 1.4em;
+      margin-bottom: 28px;
+    }
+    .userstuff p {
+      margin: 0 0 1em;
+      text-indent: 1.5em;
+      text-align: justify;
+    }
+    @media print {
+      body { background: #ffffff; margin: 0; max-width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header class="book-header" id="preface">
+    <h1 class="heading">${safeTitle}</h1>
+    <div class="author">por <a rel="author">${safeAuthor}</a></div>
+    ${
+      synopsisHtml
+        ? `<blockquote class="summary userstuff">${synopsisHtml}</blockquote>`
+        : ""
+    }
+  </header>
+  <main id="chapters">
+${chaptersHtml}
+  </main>
+</body>
+</html>`;
 }
 
-export async function exportWorkBundleZip(
+export async function exportWorkAsHtmlBook(
   work: WorkItem,
   options?: {
     exportTranslatedPt?: boolean;
@@ -369,7 +453,180 @@ export async function exportWorkBundleZip(
     onProgress?: (msg: string) => void;
   }
 ) {
-  await exportWorkAsEpub(work, options);
+  const targetWork = options?.exportTranslatedPt
+    ? await ensureWorkFullyTranslatedForExport(
+        work,
+        options.sourceLang || "auto",
+        options.onProgress
+      )
+    : work;
+
+  const html = generateCleanBookHtmlString(targetWork);
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const suffix = options?.exportTranslatedPt ? " (PT-BR)" : "";
+  triggerBrowserDownload(
+    blob,
+    `${sanitizeFilename(targetWork.title)}${suffix}.html`
+  );
+}
+
+// ============================================================================
+// 3. EXPORTAR COMO .MOBI (Container PalmDOC/MOBI compatível com Kindle e reimportação)
+// ============================================================================
+function buildPalmDocMobiBinary(title: string, htmlPayload: string): Uint8Array {
+  const encoder = new TextEncoder();
+  const textBytes = encoder.encode(htmlPayload);
+
+  const RECORD_SIZE = 4096;
+  const textRecords: Uint8Array[] = [];
+  for (let offset = 0; offset < textBytes.length; offset += RECORD_SIZE) {
+    textRecords.push(textBytes.slice(offset, offset + RECORD_SIZE));
+  }
+  if (textRecords.length === 0) {
+    textRecords.push(encoder.encode("<p></p>"));
+  }
+
+  // Record 0: PalmDOC Header (16 bytes) + MOBI Header básico
+  const titleBytes = encoder.encode(title.slice(0, 120));
+  const rec0Length = 16 + 116 + titleBytes.length;
+  const rec0 = new Uint8Array(rec0Length);
+  const rec0View = new DataView(rec0.buffer);
+
+  // PalmDOC Header (compression = 1 (uncompressed), textLength, recordCount, recordSize = 4096)
+  rec0View.setUint16(0, 1, false); // 1 = No compression (100% compatível com nosso parser e leitores)
+  rec0View.setUint16(2, 0, false);
+  rec0View.setUint32(4, textBytes.length, false);
+  rec0View.setUint16(8, textRecords.length, false);
+  rec0View.setUint16(10, RECORD_SIZE, false);
+  rec0View.setUint32(12, 0, false);
+
+  // Assinatura "MOBI" no offset 16 do Record 0
+  rec0.set(encoder.encode("MOBI"), 16);
+  rec0View.setUint32(20, 116, false); // Header length
+  rec0View.setUint32(24, 2, false); // MOBI type: Book
+  rec0View.setUint32(28, 65001, false); // UTF-8 encoding
+  rec0View.setUint32(84, 16 + 116, false); // Full name offset dentro do Rec 0
+  rec0View.setUint32(88, titleBytes.length, false); // Full name length
+  rec0.set(titleBytes, 16 + 116);
+
+  const totalRecords = 1 + textRecords.length;
+  const pdbHeaderSize = 78 + totalRecords * 8 + 2;
+  const totalFileSize =
+    pdbHeaderSize +
+    rec0.length +
+    textRecords.reduce((acc, r) => acc + r.length, 0);
+
+  const output = new Uint8Array(totalFileSize);
+  const outView = new DataView(output.buffer);
+
+  // Nome PDB nos primeiros 32 bytes
+  const pdbName = encoder.encode(sanitizeFilename(title).slice(0, 31));
+  output.set(pdbName, 0);
+
+  // Tipo "BOOK" e Criador "MOBI" no offset 60..68
+  output.set(encoder.encode("BOOKMOBI"), 60);
+  outView.setUint16(76, totalRecords, false);
+
+  let currentOffset = pdbHeaderSize;
+  // Entrada do Record 0
+  outView.setUint32(78, currentOffset, false);
+  currentOffset += rec0.length;
+
+  // Entradas dos Records de Texto
+  for (let i = 0; i < textRecords.length; i++) {
+    outView.setUint32(78 + (i + 1) * 8, currentOffset, false);
+    currentOffset += textRecords[i].length;
+  }
+
+  // Copiar dados dos records
+  let writePos = pdbHeaderSize;
+  output.set(rec0, writePos);
+  writePos += rec0.length;
+
+  for (const r of textRecords) {
+    output.set(r, writePos);
+    writePos += r.length;
+  }
+
+  return output;
+}
+
+export async function exportWorkAsMobi(
+  work: WorkItem,
+  options?: {
+    exportTranslatedPt?: boolean;
+    sourceLang?: SourceLangCode;
+    onProgress?: (msg: string) => void;
+  }
+) {
+  const targetWork = options?.exportTranslatedPt
+    ? await ensureWorkFullyTranslatedForExport(
+        work,
+        options.sourceLang || "auto",
+        options.onProgress
+      )
+    : work;
+
+  const chaptersMobiHtml = targetWork.chapters
+    .map((ch, idx) => {
+      const chTitle = escapeXml(ch.title || `Capítulo ${idx + 1}`);
+      const paragraphs = extractCleanParagraphsList(ch)
+        .map((p) => `<p>${escapeXml(p)}</p>`)
+        .join("\n");
+      return `<h1>${chTitle}</h1>\n${paragraphs}`;
+    })
+    .join("\n<mbp:pagebreak/>\n");
+
+  const fullMobiHtml = `<html><head><title>${escapeXml(
+    targetWork.title
+  )}</title></head><body>${chaptersMobiHtml}</body></html>`;
+
+  const mobiBytes = buildPalmDocMobiBinary(targetWork.title, fullMobiHtml);
+  const blob = new Blob([mobiBytes], {
+    type: "application/x-mobipocket-ebook",
+  });
+  const suffix = options?.exportTranslatedPt ? " (PT-BR)" : "";
+  triggerBrowserDownload(
+    blob,
+    `${sanitizeFilename(targetWork.title)}${suffix}.mobi`
+  );
+}
+
+// ============================================================================
+// 4. EXPORTAR COMO .PDF (Livro diagramado limpo para salvar/imprimir em PDF)
+// ============================================================================
+export async function exportWorkAsPdf(
+  work: WorkItem,
+  options?: {
+    exportTranslatedPt?: boolean;
+    sourceLang?: SourceLangCode;
+    onProgress?: (msg: string) => void;
+  }
+) {
+  const targetWork = options?.exportTranslatedPt
+    ? await ensureWorkFullyTranslatedForExport(
+        work,
+        options.sourceLang || "auto",
+        options.onProgress
+      )
+    : work;
+
+  const cleanHtml = generateCleanBookHtmlString(targetWork);
+  const printWindow = window.open("", "_blank", "width=900,height=800");
+  if (!printWindow) {
+    // Fallback caso o bloqueador de pop-ups impeça a janela de impressão PDF
+    await exportWorkAsHtmlBook(work, options);
+    return;
+  }
+
+  printWindow.document.open();
+  printWindow.document.write(cleanHtml);
+  printWindow.document.close();
+  printWindow.focus();
+
+  setTimeout(() => {
+    printWindow.print();
+  }, 350);
 }
 
 export async function exportEntireLibraryBackup() {
