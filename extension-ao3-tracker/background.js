@@ -1,5 +1,6 @@
-// Background Service Worker da Extensão:
-// Faz a leitura das páginas do AO3 Original diretamente pelo navegador da usuária (com a sessão logada do AO3 e sem nunca dar erro 525 da Vercel!)
+// Background Service Worker da Extensão (v1.3.0):
+// 1. Lê obras individuais do AO3 diretamente pelo navegador logado da usuária (sem erro 525!).
+// 2. Busca automaticamente TODAS as fanfics em que a usuária está inscrita (Subscriptions) na conta do AO3 Original!
 
 function stripTags(html) {
   return (html || "")
@@ -71,7 +72,9 @@ async function fetchAo3WorkDirectlyInBrowser(urlOrId) {
   ]);
 
   if (!workRes.ok) {
-    throw new Error(`Status ${workRes.status} ao acessar obra #${workId} no AO3.`);
+    throw new Error(
+      `Status ${workRes.status} ao acessar obra #${workId} no AO3.`
+    );
   }
 
   const html = await workRes.text();
@@ -223,6 +226,82 @@ async function fetchAo3WorkDirectlyInBrowser(urlOrId) {
   };
 }
 
+// Descobre o username logado no AO3 e busca todas as páginas de Subscriptions de Fanfics (/users/USERNAME/subscriptions?type=works)
+async function fetchAllUserSubscriptionsFromAo3(explicitUsername) {
+  let username = (explicitUsername || "").trim();
+
+  if (!username) {
+    // Descobrir automaticamente o usuário logado no AO3 acessando a home com os cookies da sessão
+    const homeRes = await fetch("https://archiveofourown.org/", {
+      credentials: "include",
+      cache: "no-store",
+    });
+    if (!homeRes.ok) {
+      throw new Error(
+        `Não foi possível acessar o AO3 (Status ${homeRes.status}). Verifique se você está logada em archiveofourown.org neste navegador.`
+      );
+    }
+    const homeHtml = await homeRes.text();
+    const userMatch =
+      homeHtml.match(/href="\/users\/([^"/?#]+)\/subscriptions"/i) ||
+      homeHtml.match(/href="\/users\/([^"/?#]+)"[^>]*>Hi,/i) ||
+      homeHtml.match(/<a[^>]*href="\/users\/([^"/?#]+)"[^>]*>/i);
+
+    if (userMatch && userMatch[1] && userMatch[1] !== "login") {
+      username = userMatch[1];
+    }
+  }
+
+  if (!username) {
+    throw new Error(
+      "Você precisa estar logada na sua conta em https://archiveofourown.org neste navegador (ou digitar seu nome de usuário do AO3) para buscar suas inscrições!"
+    );
+  }
+
+  const workIds = [];
+  const seenIds = new Set();
+
+  // Percorrer até 10 páginas de Subscriptions (tanto na aba Works quanto geral)
+  for (let page = 1; page <= 10; page++) {
+    const subUrl = `https://archiveofourown.org/users/${encodeURIComponent(
+      username
+    )}/subscriptions?page=${page}`;
+    const res = await fetch(subUrl, {
+      credentials: "include",
+      cache: "no-store",
+    });
+    if (!res.ok) break;
+
+    const html = await res.text();
+    // Na página de Subscriptions do AO3, cada inscrição fica em <dt> com links /works/ID
+    const regex = /<a[^>]*href="\/works\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let m;
+    let foundOnThisPage = 0;
+    while ((m = regex.exec(html)) !== null) {
+      const wId = m[1];
+      const wTitle = stripTags(m[2]);
+      if (wId && !seenIds.has(wId)) {
+        seenIds.add(wId);
+        workIds.push({ workId: wId, title: wTitle });
+        foundOnThisPage++;
+      }
+    }
+
+    // Verificar se existe próxima página (<li class="next"><a ...>)
+    const hasNextPage = /<li[^>]*class="[^"]*\bnext\b[^"]*"[^>]*>\s*<a/i.test(
+      html
+    );
+    if (!hasNextPage || foundOnThisPage === 0) {
+      break;
+    }
+  }
+
+  return {
+    username,
+    subscriptions: workIds,
+  };
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message && message.type === "AO3_BG_FETCH_WORK") {
     fetchAo3WorkDirectlyInBrowser(message.urlOrId)
@@ -230,6 +309,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch((err) =>
         sendResponse({ ok: false, error: err?.message || "Erro ao ler AO3" })
       );
-    return true; // Resposta assíncrona
+    return true;
+  }
+
+  if (message && message.type === "AO3_BG_FETCH_SUBSCRIPTIONS_LIST") {
+    fetchAllUserSubscriptionsFromAo3(message.username)
+      .then((result) => sendResponse({ ok: true, data: result }))
+      .catch((err) =>
+        sendResponse({
+          ok: false,
+          error:
+            err?.message || "Erro ao buscar suas inscrições (Subscriptions).",
+        })
+      );
+    return true;
   }
 });

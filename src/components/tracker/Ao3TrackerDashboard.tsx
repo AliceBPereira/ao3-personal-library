@@ -271,6 +271,39 @@ export function Ao3TrackerDashboard() {
     }
   };
 
+  const handleImportAllSubscriptions = async () => {
+    setIsSyncingAll(true);
+    setFeedbackBanner(null);
+    setSyncProgressText(
+      "Acessando sua lista de Inscrições (Subscriptions) no AO3 Original..."
+    );
+    try {
+      const result = await importAllUserSubscriptionsFromAo3(
+        undefined,
+        (curr, total, title) => {
+          setSyncProgressText(
+            `Importando inscrição ${curr}/${total}: "${title}"...`
+          );
+        }
+      );
+      setFeedbackBanner({
+        type: "success",
+        message: `✓ Sucesso! Foram importadas ${result.importedCount} fanfic(s) das inscrições da conta "${result.username}" no AO3 Original!`,
+      });
+    } catch (err: unknown) {
+      setFeedbackBanner({
+        type: "error",
+        message:
+          err instanceof Error
+            ? err.message
+            : "Erro ao importar suas inscrições do AO3.",
+      });
+    } finally {
+      setIsSyncingAll(false);
+      setSyncProgressText(null);
+    }
+  };
+
   const handleUpdateChaptersRead = async (
     work: AO3TrackedWork,
     newReadCount: number
@@ -418,20 +451,37 @@ export function Ao3TrackerDashboard() {
             </p>
           </div>
 
-          <button
-            type="button"
-            disabled={isSyncingAll}
-            onClick={handleSyncAllNow}
-            className="inline-flex items-center gap-2 px-4 py-2 text-white font-bold text-[12.5px] rounded-sm shadow transition-opacity hover:opacity-90 disabled:opacity-50"
-            style={{ backgroundColor: activeTheme.accent }}
-          >
-            <RefreshCw
-              className={`w-4 h-4 ${isSyncingAll ? "animate-spin" : ""}`}
-            />
-            {isSyncingAll
-              ? "Consultando AO3 Original..."
-              : "🔄 Verificar Atualizações no AO3 Original Agora"}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={isSyncingAll}
+              onClick={handleImportAllSubscriptions}
+              className="inline-flex items-center gap-2 px-3.5 py-2 border-2 font-bold text-[12.5px] rounded-sm shadow-sm transition-opacity hover:opacity-90 disabled:opacity-50"
+              style={{
+                backgroundColor: activeTheme.bg,
+                borderColor: activeTheme.accent,
+                color: activeTheme.accent,
+              }}
+              title="Busca automaticamente todas as fanfics em que você está inscrita (Subscriptions) na sua conta do AO3"
+            >
+              <span>📥 Importar Minhas Inscrições (Subscriptions) do AO3</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isSyncingAll}
+              onClick={handleSyncAllNow}
+              className="inline-flex items-center gap-2 px-4 py-2 text-white font-bold text-[12.5px] rounded-sm shadow transition-opacity hover:opacity-90 disabled:opacity-50"
+              style={{ backgroundColor: activeTheme.accent }}
+            >
+              <RefreshCw
+                className={`w-4 h-4 ${isSyncingAll ? "animate-spin" : ""}`}
+              />
+              {isSyncingAll
+                ? "Consultando AO3 Original..."
+                : "🔄 Verificar Atualizações no AO3 Original Agora"}
+            </button>
+          </div>
         </div>
 
         {syncProgressText && (
