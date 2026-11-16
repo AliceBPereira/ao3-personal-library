@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, ensureDatabaseSeeded } from "@/core/db/database";
@@ -24,12 +24,14 @@ import {
   Compass,
   Highlighter,
   MapPin,
+  Minus,
   Palette,
   Plus,
   RotateCcw,
   ScrollText,
   Sparkles,
   Trash2,
+  Type,
   X,
 } from "lucide-react";
 
@@ -57,6 +59,8 @@ const HIGHLIGHT_COLORS: Array<{
   { id: "amber", label: "Âmbar", bg: "#fde68a", border: "#d97706" },
 ];
 
+const COLUMN_GAP = 64; // Espaço entre colunas virtuais do Kindle
+
 export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const {
     theme,
@@ -77,7 +81,11 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
   const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
   const [scrollPercent, setScrollPercent] = useState(0);
+
+  // Estado da Paginação Real Estilo Kindle (baseada na altura/largura exata da tela)
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
+  const [totalPagesInChapter, setTotalPagesInChapter] = useState(1);
+  const [viewportDims, setViewportDims] = useState({ width: 720, height: 520 });
 
   // Painéis laterais e modais do leitor
   const [showAppearanceMenu, setShowAppearanceMenu] = useState(false);
@@ -89,9 +97,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const [highlightNote, setHighlightNote] = useState<string>("");
   const [highlightColor, setHighlightColor] =
     useState<HighlightItem["color"]>("yellow");
-  const [activeHighlightFlash, setActiveHighlightFlash] = useState<
-    string | null
-  >(null);
 
   // Estado de Acesso Rápido a Páginas Especiais (com retorno instantâneo)
   const [returnAnchor, setReturnAnchor] = useState<ReturnAnchor | null>(null);
@@ -105,7 +110,8 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const [newPinNotes, setNewPinNotes] = useState("");
   const [newPinImage, setNewPinImage] = useState<string | undefined>(undefined);
 
-  const contentRef = useRef<HTMLDivElement | null>(null);
+  const kindleViewportRef = useRef<HTMLDivElement | null>(null);
+  const kindleColumnsRef = useRef<HTMLDivElement | null>(null);
   const hasRestoredProgress = useRef(false);
 
   useEffect(() => {
@@ -129,6 +135,102 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       [workId]
     ) || [];
 
+  const activeTheme = READER_THEMES[theme] || READER_THEMES.cream;
+  const currentChapter =
+    work?.chapters?.[currentChapterIndex] || work?.chapters?.[0];
+
+  // Aplicar grifos visuais no HTML renderizado para os destaques salvos deste capítulo
+  const chapterHighlights = useMemo(
+    () => highlights.filter((h) => h.chapterIndex === currentChapterIndex),
+    [highlights, currentChapterIndex]
+  );
+
+  const decoratedChapterHtml = useMemo(() => {
+    const rawHtml = currentChapter?.htmlContent || "";
+    let decorated = rawHtml;
+    for (const hl of chapterHighlights) {
+      if (!hl.selectedText || hl.selectedText.length < 3) continue;
+      const colorDef =
+        HIGHLIGHT_COLORS.find((c) => c.id === hl.color) || HIGHLIGHT_COLORS[0];
+      const escaped = hl.selectedText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      try {
+        const regex = new RegExp(`(${escaped})`, "i");
+        decorated = decorated.replace(
+          regex,
+          `<mark data-hl-id="${hl.id}" style="background-color:${colorDef.bg}; color:#111; padding:1px 3px; border-bottom:2px solid ${colorDef.border}; border-radius:2px; cursor:pointer;" title="${
+            hl.note ? `Nota: ${hl.note}` : "Trecho destacado"
+          }">$1</mark>`
+        );
+      } catch {
+        // Ignore regex boundary error
+      }
+    }
+    return decorated;
+  }, [currentChapter?.htmlContent, chapterHighlights]);
+
+  // Medir a tela exata do Kindle e calcular quantas páginas o capítulo ocupa sem nenhum scroll vertical
+  const measureKindlePagination = useCallback(() => {
+    if (navigationMode !== "paginated") return;
+    const vp = kindleViewportRef.current;
+    const cols = kindleColumnsRef.current;
+    if (!vp) return;
+
+    const w = Math.max(260, vp.clientWidth);
+    const h = Math.max(220, vp.clientHeight);
+
+    setViewportDims((prev) =>
+      prev.width === w && prev.height === h ? prev : { width: w, height: h }
+    );
+
+    if (cols) {
+      const totalScrollW = cols.scrollWidth;
+      const pageStep = w + COLUMN_GAP;
+      const computedPages = Math.max(
+        1,
+        Math.round((totalScrollW + COLUMN_GAP) / pageStep)
+      );
+      setTotalPagesInChapter(computedPages);
+      setCurrentPageIndex((prevPage) =>
+        Math.min(prevPage, Math.max(0, computedPages - 1))
+      );
+    }
+  }, [navigationMode]);
+
+  // Recalcular paginação sempre que mudar tamanho da fonte, espaçamento, largura, capítulo ou redimensionar a tela
+  useEffect(() => {
+    if (navigationMode !== "paginated") return;
+    const timer = setTimeout(() => {
+      measureKindlePagination();
+    }, 40);
+
+    const vp = kindleViewportRef.current;
+    let observer: ResizeObserver | null = null;
+    if (vp && typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(() => {
+        measureKindlePagination();
+      });
+      observer.observe(vp);
+    }
+
+    window.addEventListener("resize", measureKindlePagination);
+    return () => {
+      clearTimeout(timer);
+      if (observer) observer.disconnect();
+      window.removeEventListener("resize", measureKindlePagination);
+    };
+  }, [
+    navigationMode,
+    fontSize,
+    lineHeight,
+    maxWidth,
+    fontFamily,
+    currentChapterIndex,
+    decoratedChapterHtml,
+    viewingPinnedPage,
+    returnAnchor,
+    measureKindlePagination,
+  ]);
+
   // Restaurar posição salva ao abrir o livro
   useEffect(() => {
     if (work && !hasRestoredProgress.current) {
@@ -141,7 +243,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       setScrollPercent(savedPct);
 
       setTimeout(() => {
-        if (savedPct > 0 && savedPct < 100) {
+        if (navigationMode === "scroll" && savedPct > 0 && savedPct < 100) {
           const docHeight =
             document.documentElement.scrollHeight - window.innerHeight;
           if (docHeight > 0) {
@@ -151,62 +253,37 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             });
           }
         }
-      }, 250);
+      }, 220);
     }
-  }, [work]);
+  }, [work, navigationMode]);
 
-  const activeTheme = READER_THEMES[theme] || READER_THEMES.cream;
-  const currentChapter =
-    work?.chapters?.[currentChapterIndex] || work?.chapters?.[0];
-
-  // Dividir o capítulo em páginas virtuais quando no modo de paginação horizontal
-  const paginatedPages = useMemo(() => {
-    if (!currentChapter) return ["<p>Sem conteúdo disponível.</p>"];
-    const tempDiv =
-      typeof document !== "undefined" ? document.createElement("div") : null;
-    if (!tempDiv) return [currentChapter.htmlContent];
-
-    tempDiv.innerHTML = currentChapter.htmlContent;
-    const blocks = Array.from(tempDiv.children);
-    if (blocks.length <= 2) {
-      return [currentChapter.htmlContent];
-    }
-
-    const pages: string[] = [];
-    let currentChunk: string[] = [];
-    let currentWordsCount = 0;
-    const wordsPerPage = 260;
-
-    blocks.forEach((el) => {
-      const text = el.textContent || "";
-      const wCount = text.trim().split(/\s+/).filter(Boolean).length;
-      currentChunk.push(el.outerHTML);
-      currentWordsCount += wCount;
-
-      if (currentWordsCount >= wordsPerPage) {
-        pages.push(currentChunk.join("\n"));
-        currentChunk = [];
-        currentWordsCount = 0;
+  // Quando o total de páginas for medido e houver progresso salvo, posicionar na página correspondente
+  useEffect(() => {
+    if (
+      navigationMode === "paginated" &&
+      totalPagesInChapter > 1 &&
+      scrollPercent > 0 &&
+      currentPageIndex === 0
+    ) {
+      const targetPage = Math.min(
+        totalPagesInChapter - 1,
+        Math.max(0, Math.round((scrollPercent / 100) * (totalPagesInChapter - 1)))
+      );
+      if (targetPage > 0) {
+        setCurrentPageIndex(targetPage);
       }
-    });
-
-    if (currentChunk.length > 0) {
-      pages.push(currentChunk.join("\n"));
     }
-
-    return pages.length > 0 ? pages : [currentChapter.htmlContent];
-  }, [currentChapter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigationMode, totalPagesInChapter]);
 
   // Calcular progresso efetivo (seja por scroll ou por página)
   const effectiveChapterPercent = useMemo(() => {
     if (navigationMode === "paginated") {
-      if (paginatedPages.length <= 1) return 100;
-      return Math.round(
-        ((currentPageIndex + 1) / paginatedPages.length) * 100
-      );
+      if (totalPagesInChapter <= 1) return 100;
+      return Math.round(((currentPageIndex + 1) / totalPagesInChapter) * 100);
     }
     return scrollPercent;
-  }, [navigationMode, currentPageIndex, paginatedPages.length, scrollPercent]);
+  }, [navigationMode, currentPageIndex, totalPagesInChapter, scrollPercent]);
 
   // Salvar progresso no IndexedDB conforme o usuário avança
   useEffect(() => {
@@ -217,21 +294,21 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
           currentChapterIndex,
           scrollPercentage: effectiveChapterPercent,
           currentPage: currentPageIndex + 1,
-          totalPages: paginatedPages.length,
+          totalPages: totalPagesInChapter,
           wordsRead: Math.round(
             (work.wordCount * effectiveChapterPercent) / 100
           ),
           lastReadAt: new Date().toISOString(),
         },
       });
-    }, 600);
+    }, 500);
     return () => clearTimeout(timer);
   }, [
     work,
     currentChapterIndex,
     effectiveChapterPercent,
     currentPageIndex,
-    paginatedPages.length,
+    totalPagesInChapter,
   ]);
 
   // Ouvir rolagem da janela no modo scroll
@@ -255,25 +332,48 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     return () => window.removeEventListener("scroll", handleScroll);
   }, [navigationMode, currentChapterIndex]);
 
-  // Atalhos de teclado (Setas Esquerda/Direita para passar página no modo paginado)
+  const handleNextPage = useCallback(() => {
+    if (currentPageIndex + 1 < totalPagesInChapter) {
+      setCurrentPageIndex((p) => p + 1);
+    } else if (work && currentChapterIndex + 1 < work.chapters.length) {
+      setCurrentChapterIndex((c) => c + 1);
+      setCurrentPageIndex(0);
+      setScrollPercent(0);
+    }
+  }, [currentPageIndex, totalPagesInChapter, work, currentChapterIndex]);
+
+  const handlePrevPage = useCallback(() => {
+    if (currentPageIndex > 0) {
+      setCurrentPageIndex((p) => p - 1);
+    } else if (currentChapterIndex > 0) {
+      setCurrentChapterIndex((c) => c - 1);
+      setCurrentPageIndex(0);
+      setScrollPercent(0);
+    }
+  }, [currentPageIndex, currentChapterIndex]);
+
+  // Atalhos de teclado (Setas Esquerda/Direita e Espaço para passar página no modo paginado)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (navigationMode !== "paginated") return;
       if (
         document.activeElement?.tagName === "INPUT" ||
-        document.activeElement?.tagName === "TEXTAREA"
+        document.activeElement?.tagName === "TEXTAREA" ||
+        document.activeElement?.tagName === "SELECT"
       ) {
         return;
       }
-      if (e.key === "ArrowRight") {
+      if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") {
+        e.preventDefault();
         handleNextPage();
-      } else if (e.key === "ArrowLeft") {
+      } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
+        e.preventDefault();
         handlePrevPage();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  });
+  }, [navigationMode, handleNextPage, handlePrevPage]);
 
   // Detectar seleção de texto no leitor para abrir barra de destaque estilo Kindle
   const handleMouseUpSelection = () => {
@@ -285,32 +385,32 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     }
   };
 
-  // Aplicar grifos visuais no HTML renderizado para os destaques salvos deste capítulo
-  const chapterHighlights = useMemo(
-    () => highlights.filter((h) => h.chapterIndex === currentChapterIndex),
-    [highlights, currentChapterIndex]
-  );
+  // Clique estilo Kindle na página (Esquerda = Volta, Direita = Avança, ignorando se o usuário estiver selecionando texto!)
+  const handleKindleSurfaceClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (navigationMode !== "paginated") return;
 
-  const decorateHtmlWithHighlights = (rawHtml: string) => {
-    let decorated = rawHtml;
-    for (const hl of chapterHighlights) {
-      if (!hl.selectedText || hl.selectedText.length < 3) continue;
-      const colorDef =
-        HIGHLIGHT_COLORS.find((c) => c.id === hl.color) || HIGHLIGHT_COLORS[0];
-      const escaped = hl.selectedText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      try {
-        const regex = new RegExp(`(${escaped})`, "i");
-        decorated = decorated.replace(
-          regex,
-          `<mark data-hl-id="${hl.id}" style="background-color:${colorDef.bg}; color:#111; padding:1px 3px; border-bottom:2px solid ${colorDef.border}; border-radius:2px; cursor:pointer;" title="${
-            hl.note ? `Nota: ${hl.note}` : "Trecho destacado"
-          }">$1</mark>`
-        );
-      } catch {
-        // Ignore regex error on complex HTML boundaries
-      }
+    // Se o usuário selecionou texto para destacar, não virar a página!
+    const sel = window.getSelection();
+    if (sel && sel.toString().trim().length > 0) {
+      return;
     }
-    return decorated;
+
+    // Ignorar cliques em links, botões ou elementos interativos
+    const target = e.target as HTMLElement;
+    if (target.closest("button, a, input, select, textarea, mark")) {
+      return;
+    }
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const width = rect.width;
+
+    // 35% da esquerda volta a página; 65% da direita avança a página (padrão Kindle)
+    if (clickX < width * 0.35) {
+      handlePrevPage();
+    } else {
+      handleNextPage();
+    }
   };
 
   const handleSaveHighlight = async () => {
@@ -346,7 +446,11 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       workId: work.id,
       label: `${
         currentChapter?.title || `Capítulo ${currentChapterIndex + 1}`
-      } (${effectiveChapterPercent}%)`,
+      } (${
+        navigationMode === "paginated"
+          ? `Pág. ${currentPageIndex + 1}/${totalPagesInChapter}`
+          : `${effectiveChapterPercent}%`
+      })`,
       chapterIndex: currentChapterIndex,
       scrollPercentage: effectiveChapterPercent,
       pageNumber:
@@ -368,22 +472,25 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const jumpToPosition = (
     chapterIdx: number,
     pct: number,
-    pageNum?: number,
-    highlightText?: string
+    pageNum?: number
   ) => {
     setCurrentChapterIndex(chapterIdx);
-    if (navigationMode === "paginated" && pageNum) {
-      setCurrentPageIndex(Math.max(0, pageNum - 1));
+    setScrollPercent(pct);
+
+    if (navigationMode === "paginated") {
+      setTimeout(() => {
+        if (pageNum && pageNum <= totalPagesInChapter) {
+          setCurrentPageIndex(Math.max(0, pageNum - 1));
+        } else {
+          const targetP = Math.min(
+            totalPagesInChapter - 1,
+            Math.max(0, Math.round((pct / 100) * (totalPagesInChapter - 1)))
+          );
+          setCurrentPageIndex(targetP);
+        }
+      }, 80);
     } else {
       setTimeout(() => {
-        if (highlightText) {
-          setActiveHighlightFlash(highlightText);
-          const markEl = document.querySelector("mark[data-hl-id]");
-          if (markEl) {
-            markEl.scrollIntoView({ behavior: "smooth", block: "center" });
-            return;
-          }
-        }
         const docHeight =
           document.documentElement.scrollHeight - window.innerHeight;
         window.scrollTo({
@@ -441,16 +548,15 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
         pageIndex: currentPageIndex,
         label: `${
           currentChapter?.title || `Cap. ${currentChapterIndex + 1}`
-        } (${effectiveChapterPercent}%)`,
+        } (Pág. ${currentPageIndex + 1})`,
       });
     }
     setViewingPinnedPage(pin);
     setCurrentChapterIndex(
       Math.min(pin.chapterIndex, Math.max(0, (work?.chapters.length || 1) - 1))
     );
-    if (navigationMode === "paginated" && pin.pageNumber) {
-      setCurrentPageIndex(Math.max(0, pin.pageNumber - 1));
-    } else {
+    setCurrentPageIndex(Math.max(0, (pin.pageNumber || 1) - 1));
+    if (navigationMode === "scroll") {
       setTimeout(() => {
         const docHeight =
           document.documentElement.scrollHeight - window.innerHeight;
@@ -471,38 +577,17 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     setViewingPinnedPage(null);
     setCurrentChapterIndex(target.chapterIndex);
     setCurrentPageIndex(target.pageIndex);
+    setScrollPercent(target.scrollPercentage);
 
-    setTimeout(() => {
-      if (navigationMode === "scroll") {
+    if (navigationMode === "scroll") {
+      setTimeout(() => {
         const docHeight =
           document.documentElement.scrollHeight - window.innerHeight;
         window.scrollTo({
           top: (docHeight * target.scrollPercentage) / 100,
           behavior: "smooth",
         });
-      }
-    }, 120);
-  };
-
-  const handleNextPage = () => {
-    if (currentPageIndex + 1 < paginatedPages.length) {
-      setCurrentPageIndex((p) => p + 1);
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    } else if (work && currentChapterIndex + 1 < work.chapters.length) {
-      setCurrentChapterIndex((c) => c + 1);
-      setCurrentPageIndex(0);
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
-  };
-
-  const handlePrevPage = () => {
-    if (currentPageIndex > 0) {
-      setCurrentPageIndex((p) => p - 1);
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    } else if (currentChapterIndex > 0) {
-      setCurrentChapterIndex((c) => c - 1);
-      setCurrentPageIndex(0);
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      }, 120);
     }
   };
 
@@ -539,17 +624,21 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       ? "font-mono"
       : "font-ao3Sans";
 
+  const isPaginated = navigationMode === "paginated";
+
   return (
     <div
-      className="min-h-screen transition-colors duration-300 flex flex-col"
+      className={`transition-colors duration-300 flex flex-col ${
+        isPaginated ? "h-screen overflow-hidden select-text" : "min-h-screen"
+      }`}
       style={{
         backgroundColor: activeTheme.bg,
         color: activeTheme.text,
       }}
     >
-      {/* ================= BARRA SUPERIOR FIXA DO LEITOR ================= */}
+      {/* ================= BARRA SUPERIOR DO LEITOR ================= */}
       <header
-        className="sticky top-0 z-30 border-b px-3 sm:px-6 py-2.5 transition-colors shadow-sm"
+        className="shrink-0 z-30 border-b px-3 sm:px-6 py-2 transition-colors shadow-sm"
         style={{
           backgroundColor: activeTheme.surface,
           borderColor: activeTheme.border,
@@ -557,7 +646,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       >
         <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-2">
           {/* Esquerda: Voltar + Título da Obra + Seletor de Capítulos */}
-          <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
             <Link
               href="/"
               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-sm border text-[12px] font-medium hover:opacity-80 transition-opacity shrink-0"
@@ -571,15 +660,15 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               Biblioteca
             </Link>
 
-            <div className="min-w-0 hidden md:block">
-              <h1 className="text-[14px] font-bold truncate leading-tight">
+            <div className="min-w-0 hidden lg:block">
+              <h1 className="text-[13.5px] font-bold truncate leading-tight max-w-[240px]">
                 {work.title}
               </h1>
               <p
-                className="text-[11px] truncate"
+                className="text-[10.5px] truncate"
                 style={{ color: activeTheme.muted }}
               >
-                por {work.author} • {work.format.toUpperCase()}
+                por {work.author}
               </p>
             </div>
 
@@ -589,9 +678,12 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 onChange={(e) => {
                   setCurrentChapterIndex(Number(e.target.value));
                   setCurrentPageIndex(0);
-                  window.scrollTo({ top: 0, behavior: "smooth" });
+                  setScrollPercent(0);
+                  if (!isPaginated) {
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }
                 }}
-                className="text-[12px] px-2 py-1 rounded-sm border max-w-[200px] sm:max-w-[240px]"
+                className="text-[12px] px-2 py-1 rounded-sm border max-w-[180px] sm:max-w-[220px]"
                 style={{
                   backgroundColor: activeTheme.bg,
                   color: activeTheme.text,
@@ -607,32 +699,44 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             )}
           </div>
 
-          {/* Direita: Controles do Leitor (Scroll/Página, Temas de Papel, Destaques Kindle, Páginas Especiais Fixadas) */}
+          {/* Centro/Direita: Controle Rápido de Tamanho da Letra (A- / A+) + Modos + Páginas Especiais */}
           <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
-            {/* Alternador Scroll Vertical vs Paginação Horizontal */}
+            {/* Botões rápidos A- / A+ direto na barra para ajustar tamanho da letra e ver a paginação reagir na hora */}
+            <div
+              className="inline-flex items-center rounded-sm border px-1 py-0.5 gap-1"
+              style={{
+                borderColor: activeTheme.border,
+                backgroundColor: activeTheme.bg,
+              }}
+              title="Ajustar tamanho da letra (recalcula as páginas automaticamente)"
+            >
+              <Type className="w-3.5 h-3.5 ml-1 opacity-70" />
+              <button
+                type="button"
+                onClick={() => setFontSize(Math.max(13, fontSize - 1))}
+                className="p-1 hover:opacity-75 rounded-sm"
+                title="Diminuir letra (A-)"
+              >
+                <Minus className="w-3 h-3" />
+              </button>
+              <span className="text-[11px] font-bold min-w-[30px] text-center">
+                {fontSize}px
+              </span>
+              <button
+                type="button"
+                onClick={() => setFontSize(Math.min(30, fontSize + 1))}
+                className="p-1 hover:opacity-75 rounded-sm"
+                title="Aumentar letra (A+)"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+            </div>
+
+            {/* Alternador Paginação Kindle vs Rolagem Vertical */}
             <div
               className="inline-flex rounded-sm border overflow-hidden"
               style={{ borderColor: activeTheme.border }}
             >
-              <button
-                type="button"
-                onClick={() => setNavigationMode("scroll")}
-                className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11.5px] transition-colors ${
-                  navigationMode === "scroll" ? "font-bold" : "opacity-75"
-                }`}
-                style={{
-                  backgroundColor:
-                    navigationMode === "scroll"
-                      ? activeTheme.accent
-                      : activeTheme.bg,
-                  color:
-                    navigationMode === "scroll" ? "#ffffff" : activeTheme.text,
-                }}
-                title="Rolagem Vertical Contínua"
-              >
-                <ScrollText className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Rolagem</span>
-              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -640,26 +744,39 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                   setCurrentPageIndex(0);
                 }}
                 className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11.5px] transition-colors ${
-                  navigationMode === "paginated" ? "font-bold" : "opacity-75"
+                  isPaginated ? "font-bold" : "opacity-75"
                 }`}
                 style={{
-                  backgroundColor:
-                    navigationMode === "paginated"
-                      ? activeTheme.accent
-                      : activeTheme.bg,
-                  color:
-                    navigationMode === "paginated"
-                      ? "#ffffff"
-                      : activeTheme.text,
+                  backgroundColor: isPaginated
+                    ? activeTheme.accent
+                    : activeTheme.bg,
+                  color: isPaginated ? "#ffffff" : activeTheme.text,
                 }}
-                title="Paginação Horizontal (Passar páginas para o lado)"
+                title="Modo Paginado Estilo Kindle (Ocupa a tela inteira sem scroll, clique nas laterais para passar a página)"
               >
                 <Columns className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Paginado</span>
+                <span>Kindle (Paginado)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setNavigationMode("scroll")}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11.5px] transition-colors ${
+                  !isPaginated ? "font-bold" : "opacity-75"
+                }`}
+                style={{
+                  backgroundColor: !isPaginated
+                    ? activeTheme.accent
+                    : activeTheme.bg,
+                  color: !isPaginated ? "#ffffff" : activeTheme.text,
+                }}
+                title="Rolagem Vertical Contínua"
+              >
+                <ScrollText className="w-3.5 h-3.5" />
+                <span>Rolagem</span>
               </button>
             </div>
 
-            {/* Botão de Acesso Rápido: Páginas Especiais Fixadas (Mapas, Árvores Genealógicas, Glossários) */}
+            {/* Botão de Acesso Rápido: Páginas Especiais Fixadas */}
             <button
               type="button"
               onClick={() => setShowPinnedModal(true)}
@@ -672,7 +789,8 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               title="Consultar ou fixar Mapas, Árvores Genealógicas e Glossários com retorno instantâneo"
             >
               <Compass className="w-3.5 h-3.5" />
-              <span>Páginas Especiais ({pinnedPages.length})</span>
+              <span className="hidden sm:inline">Páginas Especiais</span>
+              <span>({pinnedPages.length})</span>
             </button>
 
             {/* Botão Marcador Rápido */}
@@ -685,10 +803,9 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 backgroundColor: activeTheme.bg,
                 color: activeTheme.text,
               }}
-              title="Marcar esta posição da página"
+              title="Marcar esta página"
             >
               <Bookmark className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Marcar</span>
             </button>
 
             {/* Botão Painel de Destaques e Marcadores (Estilo Kindle) */}
@@ -701,12 +818,11 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 backgroundColor: activeTheme.bg,
                 color: activeTheme.text,
               }}
-              title="Abrir painel de Destaques e Marcadores (Kindle)"
+              title="Abrir caderno de Destaques e Marcadores"
             >
               <Highlighter className="w-3.5 h-3.5" />
-              <span>
-                Destaques ({highlights.length + bookmarks.length})
-              </span>
+              <span className="hidden md:inline">Destaques</span>
+              <span>({highlights.length + bookmarks.length})</span>
             </button>
 
             {/* Botão Temas de Papel e Tipografia */}
@@ -723,7 +839,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               }}
             >
               <Palette className="w-3.5 h-3.5" />
-              <span>Temas & Fonte</span>
+              <span className="hidden sm:inline">Temas</span>
             </button>
           </div>
         </div>
@@ -731,7 +847,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
         {/* ================= PAINEL SUSPENSO DE TEMAS DE PAPEL E TIPOGRAFIA ================= */}
         {showAppearanceMenu && (
           <div
-            className="max-w-4xl mx-auto mt-2.5 p-3.5 rounded-sm border shadow-lg space-y-3 text-[12.5px]"
+            className="max-w-4xl mx-auto mt-2 p-3.5 rounded-sm border shadow-xl space-y-3 text-[12.5px]"
             style={{
               backgroundColor: activeTheme.bg,
               borderColor: activeTheme.border,
@@ -802,7 +918,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 <div className="flex gap-1">
                   {(
                     [
-                      { id: "serif", label: "Serif (Georgia)" },
+                      { id: "serif", label: "Serif (Kindle)" },
                       { id: "sans", label: "Sans (AO3)" },
                       { id: "mono", label: "Mono" },
                     ] as const
@@ -832,8 +948,8 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 </label>
                 <input
                   type="range"
-                  min={14}
-                  max={28}
+                  min={13}
+                  max={30}
                   value={fontSize}
                   onChange={(e) => setFontSize(Number(e.target.value))}
                   className="w-full accent-[#990000]"
@@ -848,7 +964,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 <div className="flex gap-2">
                   <input
                     type="range"
-                    min={1.4}
+                    min={1.35}
                     max={2.2}
                     step={0.05}
                     value={lineHeight}
@@ -857,8 +973,8 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                   />
                   <input
                     type="range"
-                    min={580}
-                    max={980}
+                    min={520}
+                    max={1050}
                     step={20}
                     value={maxWidth}
                     onChange={(e) => setMaxWidth(Number(e.target.value))}
@@ -869,7 +985,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
               <div>
                 <label className="block text-[11px] mb-1 opacity-80">
-                  Seu Ritmo de Leitura: <strong>{wpm} palavras/min</strong>
+                  Velocidade de Leitura: <strong>{wpm} WPM</strong>
                 </label>
                 <input
                   type="range"
@@ -886,21 +1002,21 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
         )}
       </header>
 
-      {/* ================= BANNER FLUTUANTE DE RETORNO INSTANTÂNEO (PÁGINA ESPECIAL) ================= */}
+      {/* ================= BANNER DE RETORNO INSTANTÂNEO (PÁGINA ESPECIAL) ================= */}
       {returnAnchor && (
-        <div className="sticky top-[53px] z-20 bg-[#990000] text-white px-4 py-2 shadow-md flex flex-wrap items-center justify-between gap-2 text-[12.5px]">
+        <div className="shrink-0 z-20 bg-[#990000] text-white px-4 py-1.5 shadow-md flex flex-wrap items-center justify-between gap-2 text-[12px]">
           <div className="flex items-center gap-2">
             <Compass className="w-4 h-4 animate-pulse shrink-0" />
             <span>
               Consultando Página Especial:{" "}
-              <strong>{viewingPinnedPage?.title || "Referência"}</strong>. Sua
-              leitura está pausada em <em>{returnAnchor.label}</em>.
+              <strong>{viewingPinnedPage?.title || "Referência"}</strong>.
+              Leitura pausada em <em>{returnAnchor.label}</em>.
             </span>
           </div>
           <button
             type="button"
             onClick={handleReturnFromSpecialPage}
-            className="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-[#990000] font-bold rounded-sm shadow hover:bg-[#f5f5f5] transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-0.5 bg-white text-[#990000] font-bold rounded-sm shadow hover:bg-[#f5f5f5] transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             Voltar Instantaneamente para Onde Eu Estava
@@ -910,7 +1026,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
       {/* ================= BARRA FLUTUANTE DE SELEÇÃO (DESTAQUE ESTILO KINDLE) ================= */}
       {selectedQuote && (
-        <div className="fixed bottom-16 left-1/2 -translate-x-1/2 z-40 w-[92%] max-w-lg bg-white text-[#222] border-2 border-[#990000] rounded-sm shadow-2xl p-3 font-ao3Sans text-[12.5px]">
+        <div className="fixed bottom-14 left-1/2 -translate-x-1/2 z-40 w-[92%] max-w-lg bg-white text-[#222] border-2 border-[#990000] rounded-sm shadow-2xl p-3 font-ao3Sans text-[12.5px]">
           <div className="flex items-center justify-between mb-1.5">
             <span className="font-bold text-[#990000] flex items-center gap-1.5">
               <Sparkles className="w-4 h-4" />
@@ -976,207 +1092,279 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
         </div>
       )}
 
-      {/* ================= CORPO PRINCIPAL DO LEITOR ================= */}
-      <main
-        className="flex-1 w-full mx-auto px-4 sm:px-8 py-6 sm:py-10"
-        style={{ maxWidth: `${maxWidth + 80}px` }}
-        onMouseUp={handleMouseUpSelection}
-      >
-        {/* Bloco de Prefácio Estilo AO3 no primeiro capítulo/página */}
-        {currentChapterIndex === 0 && currentPageIndex === 0 && (
-          <section
-            className="mb-8 p-4 rounded-sm border text-[12.5px] font-ao3Sans"
+      {/* ================= ÁREA DE LEITURA: MODO PAGINADO KINDLE (SEM SCROLL) vs MODO ROLAGEM ================= */}
+      {isPaginated ? (
+        <main
+          onClick={handleKindleSurfaceClick}
+          onMouseUp={handleMouseUpSelection}
+          className="flex-1 relative flex items-center justify-center overflow-hidden px-8 sm:px-14 py-4 cursor-pointer"
+          title="Clique no lado direito para avançar a página ou no lado esquerdo para voltar"
+        >
+          {/* Zona / Botão Lateral Esquerdo (Página Anterior) */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handlePrevPage();
+            }}
+            disabled={currentChapterIndex === 0 && currentPageIndex === 0}
+            className="absolute left-1.5 sm:left-3 top-1/2 -translate-y-1/2 z-20 p-2 rounded-full border opacity-40 hover:opacity-100 disabled:opacity-10 transition-opacity"
             style={{
               backgroundColor: activeTheme.surface,
               borderColor: activeTheme.border,
+              color: activeTheme.text,
             }}
+            title="Página Anterior (ou clique no lado esquerdo da página)"
           >
-            <div className="flex items-start gap-3 mb-3">
-              <StatusIconsGrid
-                rating={work.rating}
-                category={work.category}
-                warningStatus={work.warningStatus}
-                completionStatus={work.completionStatus}
-              />
-              <div>
-                <h2
-                  className="text-[20px] font-serif font-bold leading-snug"
-                  style={{ color: activeTheme.accent }}
-                >
-                  {work.title}
-                </h2>
-                <p className="text-[13px]" style={{ color: activeTheme.muted }}>
-                  por <strong>{work.author}</strong> • Fandom:{" "}
-                  {work.fandoms.join(", ")}
-                </p>
-              </div>
-            </div>
+            <ChevronLeft className="w-5 h-5" />
+          </button>
 
-            <div className="space-y-1 text-[12px] border-t pt-2.5" style={{ borderColor: activeTheme.border }}>
-              <div>
-                <strong>Avisos:</strong> {work.tags.warnings.join(", ")}
-              </div>
-              {work.tags.relationships.length > 0 && (
-                <div>
-                  <strong>Relacionamentos:</strong>{" "}
-                  {work.tags.relationships.join(", ")}
-                </div>
-              )}
-              {work.tags.characters.length > 0 && (
-                <div>
-                  <strong>Personagens:</strong>{" "}
-                  {work.tags.characters.join(", ")}
-                </div>
-              )}
-              {work.tags.freeforms.length > 0 && (
-                <div>
-                  <strong>Tags Adicionais:</strong>{" "}
-                  {work.tags.freeforms.join(", ")}
-                </div>
-              )}
-            </div>
-
-            {work.summary && (
-              <blockquote
-                className="mt-3 pt-2.5 border-t italic text-[12.5px]"
+          {/* Container da Página do Kindle que mede exatamente a altura e largura disponíveis na tela */}
+          <div
+            ref={kindleViewportRef}
+            className="w-full h-full overflow-hidden relative"
+            style={{ maxWidth: `${maxWidth}px` }}
+          >
+            <div
+              ref={kindleColumnsRef}
+              className={`${fontClass} reader-prose kindle-columns-flow h-full transition-transform duration-300 ease-out`}
+              style={{
+                fontSize: `${fontSize}px`,
+                lineHeight: lineHeight,
+                height: `${viewportDims.height}px`,
+                columnWidth: `${viewportDims.width}px`,
+                columnGap: `${COLUMN_GAP}px`,
+                columnFill: "auto",
+                transform: `translate3d(-${
+                  currentPageIndex * (viewportDims.width + COLUMN_GAP)
+                }px, 0, 0)`,
+              }}
+            >
+              {/* Cabeçalho compacto no início do capítulo */}
+              <div
+                className="mb-4 pb-2 border-b"
                 style={{ borderColor: activeTheme.border }}
               >
-                {work.summary}
-              </blockquote>
-            )}
-          </section>
-        )}
-
-        {/* Caso esteja visualizando uma Página Especial com Imagem ou Notas Customizadas */}
-        {viewingPinnedPage && (
-          <div
-            className="mb-6 p-4 rounded-sm border-2"
-            style={{
-              borderColor: activeTheme.accent,
-              backgroundColor: activeTheme.surface,
-            }}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span
-                className="text-[13px] font-bold uppercase tracking-wider flex items-center gap-1.5"
-                style={{ color: activeTheme.accent }}
-              >
-                <MapPin className="w-4 h-4" />
-                Página Especial de Referência: {viewingPinnedPage.title}
-              </span>
-              {returnAnchor && (
-                <button
-                  type="button"
-                  onClick={handleReturnFromSpecialPage}
-                  className="text-[12px] underline font-semibold"
+                <div
+                  className="text-[11px] uppercase tracking-wider font-ao3Sans"
+                  style={{ color: activeTheme.muted }}
+                >
+                  {work.title} • {work.author}
+                </div>
+                <h2
+                  className="text-[1.2em] font-serif font-bold mt-0.5"
                   style={{ color: activeTheme.accent }}
                 >
-                  Fechar e voltar para a leitura
-                </button>
+                  {currentChapter?.title ||
+                    `Capítulo ${currentChapterIndex + 1}`}
+                </h2>
+              </div>
+
+              {/* Caso esteja consultando uma Página Especial Fixada */}
+              {viewingPinnedPage && (
+                <div
+                  className="mb-4 p-3 rounded-sm border"
+                  style={{
+                    borderColor: activeTheme.accent,
+                    backgroundColor: activeTheme.surface,
+                  }}
+                >
+                  <div className="font-bold text-[0.9em] mb-1">
+                    📌 {viewingPinnedPage.title}
+                  </div>
+                  {viewingPinnedPage.customHtmlOrNotes && (
+                    <p className="text-[0.88em] whitespace-pre-line">
+                      {viewingPinnedPage.customHtmlOrNotes}
+                    </p>
+                  )}
+                  {viewingPinnedPage.imageDataUrl && (
+                    <img
+                      src={viewingPinnedPage.imageDataUrl}
+                      alt={viewingPinnedPage.title}
+                      className="max-h-[260px] w-auto mx-auto rounded my-2"
+                    />
+                  )}
+                </div>
               )}
-            </div>
-            {viewingPinnedPage.customHtmlOrNotes && (
-              <p className="text-[13.5px] whitespace-pre-line mb-3">
-                {viewingPinnedPage.customHtmlOrNotes}
-              </p>
-            )}
-            {viewingPinnedPage.imageDataUrl && (
-              <img
-                src={viewingPinnedPage.imageDataUrl}
-                alt={viewingPinnedPage.title}
-                className="max-h-[460px] w-auto mx-auto rounded border"
+
+              {/* Conteúdo HTML do capítulo paginado automaticamente pelas colunas do tamanho da tela */}
+              <div
+                dangerouslySetInnerHTML={{
+                  __html: decoratedChapterHtml,
+                }}
               />
-            )}
+            </div>
           </div>
-        )}
 
-        {/* Cabeçalho do Capítulo Atual */}
-        <div
-          className="mb-6 pb-3 border-b flex flex-wrap items-center justify-between gap-2"
-          style={{ borderColor: activeTheme.border }}
+          {/* Zona / Botão Lateral Direito (Próxima Página) */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleNextPage();
+            }}
+            disabled={
+              currentChapterIndex === work.chapters.length - 1 &&
+              currentPageIndex >= totalPagesInChapter - 1
+            }
+            className="absolute right-1.5 sm:right-3 top-1/2 -translate-y-1/2 z-20 p-2 rounded-full border opacity-40 hover:opacity-100 disabled:opacity-10 transition-opacity"
+            style={{
+              backgroundColor: activeTheme.surface,
+              borderColor: activeTheme.border,
+              color: activeTheme.text,
+            }}
+            title="Próxima Página (ou clique no lado direito da página)"
+          >
+            <ChevronRight className="w-5 h-5" />
+          </button>
+        </main>
+      ) : (
+        /* ================= MODO ROLAGEM VERTICAL CONTÍNUA ================= */
+        <main
+          className="flex-1 w-full mx-auto px-4 sm:px-8 py-6 sm:py-10"
+          style={{ maxWidth: `${maxWidth + 80}px` }}
+          onMouseUp={handleMouseUpSelection}
         >
-          <h3 className="text-[18px] font-serif font-bold">
-            {currentChapter?.title || `Capítulo ${currentChapterIndex + 1}`}
-          </h3>
-          <span
-            className="text-[11.5px]"
-            style={{ color: activeTheme.muted }}
-          >
-            Selecione qualquer frase com o mouse para destacar (Estilo Kindle)
-          </span>
-        </div>
-
-        {/* Texto Renderizado do Capítulo (Modo Scroll vs Modo Paginado) */}
-        <article
-          ref={contentRef}
-          className={`${fontClass} reader-prose select-text space-y-4`}
-          style={{
-            fontSize: `${fontSize}px`,
-            lineHeight: lineHeight,
-            maxWidth: `${maxWidth}px`,
-            margin: "0 auto",
-          }}
-          dangerouslySetInnerHTML={{
-            __html: decorateHtmlWithHighlights(
-              navigationMode === "paginated"
-                ? paginatedPages[currentPageIndex] || ""
-                : currentChapter?.htmlContent || ""
-            ),
-          }}
-        />
-
-        {/* Controles de Paginação Horizontal ou Próximo Capítulo */}
-        {navigationMode === "paginated" ? (
-          <div
-            className="mt-10 pt-4 border-t flex items-center justify-between gap-4 font-ao3Sans text-[13px]"
-            style={{ borderColor: activeTheme.border }}
-          >
-            <button
-              type="button"
-              onClick={handlePrevPage}
-              disabled={currentChapterIndex === 0 && currentPageIndex === 0}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-sm border font-medium disabled:opacity-40"
+          {currentChapterIndex === 0 && (
+            <section
+              className="mb-8 p-4 rounded-sm border text-[12.5px] font-ao3Sans"
               style={{
                 backgroundColor: activeTheme.surface,
                 borderColor: activeTheme.border,
               }}
             >
-              <ChevronLeft className="w-4 h-4" />
-              Página Anterior
-            </button>
-
-            <div className="text-center text-[12px]">
-              <div>
-                Página <strong>{currentPageIndex + 1}</strong> de{" "}
-                <strong>{paginatedPages.length}</strong> neste capítulo
+              <div className="flex items-start gap-3 mb-3">
+                <StatusIconsGrid
+                  rating={work.rating}
+                  category={work.category}
+                  warningStatus={work.warningStatus}
+                  completionStatus={work.completionStatus}
+                />
+                <div>
+                  <h2
+                    className="text-[20px] font-serif font-bold leading-snug"
+                    style={{ color: activeTheme.accent }}
+                  >
+                    {work.title}
+                  </h2>
+                  <p
+                    className="text-[13px]"
+                    style={{ color: activeTheme.muted }}
+                  >
+                    por <strong>{work.author}</strong> • Fandom:{" "}
+                    {work.fandoms.join(", ")}
+                  </p>
+                </div>
               </div>
+
               <div
-                className="text-[11px]"
-                style={{ color: activeTheme.muted }}
+                className="space-y-1 text-[12px] border-t pt-2.5"
+                style={{ borderColor: activeTheme.border }}
               >
-                Use também as setas ← e → do teclado
+                <div>
+                  <strong>Avisos:</strong> {work.tags.warnings.join(", ")}
+                </div>
+                {work.tags.relationships.length > 0 && (
+                  <div>
+                    <strong>Relacionamentos:</strong>{" "}
+                    {work.tags.relationships.join(", ")}
+                  </div>
+                )}
+                {work.tags.characters.length > 0 && (
+                  <div>
+                    <strong>Personagens:</strong>{" "}
+                    {work.tags.characters.join(", ")}
+                  </div>
+                )}
+                {work.tags.freeforms.length > 0 && (
+                  <div>
+                    <strong>Tags Adicionais:</strong>{" "}
+                    {work.tags.freeforms.join(", ")}
+                  </div>
+                )}
               </div>
-            </div>
 
-            <button
-              type="button"
-              onClick={handleNextPage}
-              disabled={
-                currentChapterIndex === work.chapters.length - 1 &&
-                currentPageIndex === paginatedPages.length - 1
-              }
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-sm border font-medium disabled:opacity-40"
+              {work.summary && (
+                <blockquote
+                  className="mt-3 pt-2.5 border-t italic text-[12.5px]"
+                  style={{ borderColor: activeTheme.border }}
+                >
+                  {work.summary}
+                </blockquote>
+              )}
+            </section>
+          )}
+
+          {viewingPinnedPage && (
+            <div
+              className="mb-6 p-4 rounded-sm border-2"
               style={{
-                backgroundColor: activeTheme.accent,
-                color: "#ffffff",
                 borderColor: activeTheme.accent,
+                backgroundColor: activeTheme.surface,
               }}
             >
-              Próxima Página
-              <ChevronRight className="w-4 h-4" />
-            </button>
+              <div className="flex items-center justify-between mb-2">
+                <span
+                  className="text-[13px] font-bold uppercase tracking-wider flex items-center gap-1.5"
+                  style={{ color: activeTheme.accent }}
+                >
+                  <MapPin className="w-4 h-4" />
+                  Página Especial de Referência: {viewingPinnedPage.title}
+                </span>
+                {returnAnchor && (
+                  <button
+                    type="button"
+                    onClick={handleReturnFromSpecialPage}
+                    className="text-[12px] underline font-semibold"
+                    style={{ color: activeTheme.accent }}
+                  >
+                    Fechar e voltar para a leitura
+                  </button>
+                )}
+              </div>
+              {viewingPinnedPage.customHtmlOrNotes && (
+                <p className="text-[13.5px] whitespace-pre-line mb-3">
+                  {viewingPinnedPage.customHtmlOrNotes}
+                </p>
+              )}
+              {viewingPinnedPage.imageDataUrl && (
+                <img
+                  src={viewingPinnedPage.imageDataUrl}
+                  alt={viewingPinnedPage.title}
+                  className="max-h-[460px] w-auto mx-auto rounded border"
+                />
+              )}
+            </div>
+          )}
+
+          <div
+            className="mb-6 pb-3 border-b flex flex-wrap items-center justify-between gap-2"
+            style={{ borderColor: activeTheme.border }}
+          >
+            <h3 className="text-[18px] font-serif font-bold">
+              {currentChapter?.title || `Capítulo ${currentChapterIndex + 1}`}
+            </h3>
+            <span
+              className="text-[11.5px]"
+              style={{ color: activeTheme.muted }}
+            >
+              Selecione qualquer frase com o mouse para destacar (Estilo Kindle)
+            </span>
           </div>
-        ) : (
+
+          <article
+            className={`${fontClass} reader-prose select-text space-y-4`}
+            style={{
+              fontSize: `${fontSize}px`,
+              lineHeight: lineHeight,
+              maxWidth: `${maxWidth}px`,
+              margin: "0 auto",
+            }}
+            dangerouslySetInnerHTML={{
+              __html: decoratedChapterHtml,
+            }}
+          />
+
           <div
             className="mt-12 pt-5 border-t flex items-center justify-between gap-4 font-ao3Sans text-[13px]"
             style={{ borderColor: activeTheme.border }}
@@ -1207,7 +1395,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                   setCurrentChapterIndex((c) => c + 1);
                   window.scrollTo({ top: 0, behavior: "smooth" });
                 } else {
-                  // Concluir leitura e incrementar contador de releitura
                   await db.works.update(work.id, {
                     readingProgress: {
                       currentChapterIndex,
@@ -1237,12 +1424,12 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 : "✓ Concluir Leitura (+1 Leitura)"}
             </button>
           </div>
-        )}
-      </main>
+        </main>
+      )}
 
-      {/* ================= RODAPÉ FIXO DE MÉTRICAS DE TEMPO EM TEMPO REAL ================= */}
+      {/* ================= RODAPÉ DE PÁGINA E MÉTRICAS EM TEMPO REAL (ESTILO KINDLE) ================= */}
       <footer
-        className="sticky bottom-0 z-20 border-t px-4 py-2 font-ao3Sans text-[12px]"
+        className="shrink-0 z-20 border-t px-4 py-1.5 font-ao3Sans text-[11.5px]"
         style={{
           backgroundColor: activeTheme.surface,
           borderColor: activeTheme.border,
@@ -1252,14 +1439,27 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
         <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3">
             <span className="inline-flex items-center gap-1">
-              <BookOpen className="w-3.5 h-3.5" style={{ color: activeTheme.accent }} />
-              Cap. <strong>{currentChapterIndex + 1}</strong>/{work.chapters.length} (
-              <strong>{effectiveChapterPercent}%</strong>)
+              <BookOpen
+                className="w-3.5 h-3.5"
+                style={{ color: activeTheme.accent }}
+              />
+              Cap. <strong>{currentChapterIndex + 1}</strong>/
+              {work.chapters.length}
             </span>
 
-            {navigationMode === "paginated" && (
+            {isPaginated ? (
               <span>
-                • Pág. <strong>{currentPageIndex + 1}</strong>/{paginatedPages.length}
+                • Página{" "}
+                <strong style={{ color: activeTheme.accent }}>
+                  {currentPageIndex + 1}
+                </strong>{" "}
+                de <strong>{totalPagesInChapter}</strong> (Clique nas laterais
+                da tela ou use ← → para virar a página)
+              </span>
+            ) : (
+              <span>
+                • Progresso do capítulo:{" "}
+                <strong>{effectiveChapterPercent}%</strong>
               </span>
             )}
           </div>
@@ -1267,7 +1467,10 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
           {/* Métricas de Tempo em Tempo Real */}
           <div className="flex flex-wrap items-center gap-3 sm:gap-5">
             <span className="inline-flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5" style={{ color: activeTheme.accent }} />
+              <Clock
+                className="w-3.5 h-3.5"
+                style={{ color: activeTheme.accent }}
+              />
               Restante no capítulo:{" "}
               <strong style={{ color: activeTheme.accent }}>
                 {metrics.chapterTimeRemaining}
@@ -1279,7 +1482,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               <strong style={{ color: activeTheme.accent }}>
                 {metrics.bookTimeRemaining}
               </strong>{" "}
-              ({metrics.overallPercent}% lido)
+              ({metrics.overallPercent}%)
             </span>
           </div>
         </div>
@@ -1311,7 +1514,8 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 </h4>
                 {highlights.length === 0 ? (
                   <p className="text-[#666] text-[12px] bg-[#f9f9f9] p-3 border border-[#e5e5e5] rounded-sm">
-                    Nenhum trecho destacado ainda. Selecione qualquer frase do texto com o mouse para abrir o marca-texto colorido!
+                    Nenhum trecho destacado ainda. Selecione qualquer frase do
+                    texto com o mouse para abrir o marca-texto colorido!
                   </p>
                 ) : (
                   <div className="space-y-2.5">
@@ -1344,8 +1548,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                               jumpToPosition(
                                 hl.chapterIndex,
                                 hl.scrollPercentage,
-                                hl.pageNumber,
-                                hl.selectedText
+                                hl.pageNumber
                               )
                             }
                             className="p-2 rounded-sm text-[#111] cursor-pointer text-[12.5px] leading-snug"
@@ -1369,8 +1572,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                               jumpToPosition(
                                 hl.chapterIndex,
                                 hl.scrollPercentage,
-                                hl.pageNumber,
-                                hl.selectedText
+                                hl.pageNumber
                               )
                             }
                             className="mt-2 text-[11.5px] text-[#990000] font-semibold hover:underline"
@@ -1402,7 +1604,8 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
                 {bookmarks.length === 0 ? (
                   <p className="text-[#666] text-[12px] bg-[#f9f9f9] p-3 border border-[#e5e5e5] rounded-sm">
-                    Nenhum marcador salvo. Clique em &ldquo;Marcar&rdquo; na barra superior para salvar um ponto de parada.
+                    Nenhum marcador salvo. Clique no ícone de marcador na barra
+                    superior para salvar um ponto de parada.
                   </p>
                 ) : (
                   <div className="space-y-2">
@@ -1455,7 +1658,8 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             <div className="bg-[#990000] text-white px-4 py-3 flex items-center justify-between sticky top-0">
               <h3 className="font-serif text-[16px] font-bold flex items-center gap-2">
                 <Compass className="w-4 h-4" />
-                Páginas Especiais de Acesso Rápido (Mapas, Árvores Genealógicas, Glossários)
+                Páginas Especiais de Acesso Rápido (Mapas, Árvores Genealógicas,
+                Glossários)
               </h3>
               <button
                 type="button"
@@ -1468,19 +1672,25 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
             <div className="p-4 space-y-4 text-[13px]">
               <p className="text-[#444] text-[12.5px]">
-                Fixe capítulos de referência, mapas do mundo, árvores genealógicas ou glossários. Ao clicar em{" "}
-                <strong>&ldquo;Consultar Agora&rdquo;</strong>, o leitor leva você até a referência e exibe um botão no topo para{" "}
-                <strong>voltar instantaneamente para a página exata onde sua leitura estava!</strong>
+                Fixe capítulos de referência, mapas do mundo, árvores
+                genealógicas ou glossários. Ao clicar em{" "}
+                <strong>&ldquo;Consultar Agora&rdquo;</strong>, o leitor leva
+                você até a referência e exibe um botão no topo para{" "}
+                <strong>
+                  voltar instantaneamente para a página exata onde sua leitura
+                  estava!
+                </strong>
               </p>
 
-              {/* Lista de Páginas Especiais Fixadas */}
               <div className="space-y-2">
                 <h4 className="font-bold text-[#222]">
                   Referências Fixadas neste Livro ({pinnedPages.length})
                 </h4>
                 {pinnedPages.length === 0 ? (
                   <p className="text-[#666] bg-[#f8f8f8] p-3 border border-[#ddd] rounded-sm text-[12px]">
-                    Nenhuma página especial fixada neste livro ainda. Use o formulário abaixo para fixar a página atual ou adicionar um mapa/glossário!
+                    Nenhuma página especial fixada neste livro ainda. Use o
+                    formulário abaixo para fixar a página atual ou adicionar um
+                    mapa/glossário!
                   </p>
                 ) : (
                   <div className="grid grid-cols-1 gap-2.5">
@@ -1532,15 +1742,14 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 )}
               </div>
 
-              {/* Formulário para Fixar a Página Atual ou Criar Referência */}
               <form
                 onSubmit={handlePinCurrentPage}
                 className="pt-3 border-t border-[#ddd] space-y-3"
               >
                 <h4 className="font-bold text-[#990000] flex items-center gap-1.5">
                   <MapPin className="w-4 h-4" />
-                  Fixar Página Atual (Cap. {currentChapterIndex + 1} -{" "}
-                  {effectiveChapterPercent}%) ou Adicionar Mapa/Glossário
+                  Fixar Página Atual (Cap. {currentChapterIndex + 1} - Pág.{" "}
+                  {currentPageIndex + 1}) ou Adicionar Mapa/Glossário
                 </h4>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">

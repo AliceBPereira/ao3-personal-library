@@ -11,7 +11,7 @@
 }
 
 .reader-prose p {
-  margin-bottom: 1.15em;
+  margin-bottom: 1.1em;
   text-align: justify;
 }
 
@@ -21,31 +21,49 @@
 .reader-prose h4 {
   font-family: Georgia, "Times New Roman", serif;
   font-weight: 700;
-  margin-top: 1.4em;
-  margin-bottom: 0.6em;
+  margin-top: 1.1em;
+  margin-bottom: 0.55em;
+  break-after: avoid;
 }
 
 .reader-prose hr {
   border: 0;
   border-top: 1px solid currentColor;
   opacity: 0.25;
-  margin: 2em auto;
+  margin: 1.5em auto;
   width: 45%;
 }
 
 .reader-prose blockquote {
   border-left: 3px solid #990000;
   padding-left: 1rem;
-  margin: 1.25rem 0;
+  margin: 1rem 0;
   opacity: 0.92;
 }
 
 .reader-prose ul {
   list-style-type: disc;
   padding-left: 1.5rem;
-  margin-bottom: 1.2rem;
+  margin-bottom: 1rem;
 }
 
 .reader-prose li {
-  margin-bottom: 0.45rem;
+  margin-bottom: 0.35rem;
+}
+
+/* Regras para paginação estilo Kindle (CSS Multi-Column sem quebra feia de linhas) */
+.kindle-columns-flow {
+  column-fill: auto;
+}
+
+.kindle-columns-flow p,
+.kindle-columns-flow blockquote,
+.kindle-columns-flow li {
+  orphans: 2;
+  widows: 2;
+}
+
+.kindle-columns-flow img,
+.kindle-columns-flow blockquote {
+  break-inside: avoid;
 }

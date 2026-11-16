@@ -104,7 +104,7 @@ export const useReaderStore = create<ReaderStore>()(
   persist(
     (set) => ({
       theme: "cream",
-      navigationMode: "scroll",
+      navigationMode: "paginated",
       fontSize: 18,
       lineHeight: 1.75,
       maxWidth: 760,
