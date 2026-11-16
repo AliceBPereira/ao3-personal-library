@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #ffffff;
+    color: #2a2a2a;
+    font-family: "Lucida Grande", "Lucida Sans Unicode", Verdana, Helvetica, sans-serif;
+  }
+}
+
+.reader-prose p {
+  margin-bottom: 1.15em;
+  text-align: justify;
+}
+
+.reader-prose h1,
+.reader-prose h2,
+.reader-prose h3,
+.reader-prose h4 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  margin-top: 1.4em;
+  margin-bottom: 0.6em;
+}
+
+.reader-prose hr {
+  border: 0;
+  border-top: 1px solid currentColor;
+  opacity: 0.25;
+  margin: 2em auto;
+  width: 45%;
+}
+
+.reader-prose blockquote {
+  border-left: 3px solid #990000;
+  padding-left: 1rem;
+  margin: 1.25rem 0;
+  opacity: 0.92;
+}
+
+.reader-prose ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+  margin-bottom: 1.2rem;
+}
+
+.reader-prose li {
+  margin-bottom: 0.45rem;
+}
