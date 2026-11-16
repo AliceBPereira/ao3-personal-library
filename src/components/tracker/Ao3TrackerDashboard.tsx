@@ -7,6 +7,7 @@ import { db, ensureDatabaseSeeded } from "@/core/db/database";
 import {
   addOrSyncTrackedWorkFromAo3Url,
   checkAllTrackedWorksOnAo3Original,
+  importAllUserSubscriptionsFromAo3,
   saveTrackedWorkFromPayload,
 } from "@/core/services/ao3OriginalSync";
 import { READER_THEMES, useReaderStore } from "@/store/useReaderStore";
