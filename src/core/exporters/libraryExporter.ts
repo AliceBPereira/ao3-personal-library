@@ -19,49 +19,100 @@ function triggerBrowserDownload(blob: Blob, filename: string) {
 }
 
 function sanitizeFilename(name: string): string {
-  return name.replace(/[<>:"/\\|?*]+/g, "_").trim() || "obra_ao3";
+  return name.replace(/[<>:"/\\|?*]+/g, "_").trim() || "livro";
 }
 
-// Garante que o livro inteiro (título, sinopse, tags e TODOS os capítulos) esteja traduzido para Português antes de exportar,
-// e já salva no IndexedDB para ficar disponível offline!
+function escapeXml(unsafe: string): string {
+  return (unsafe || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+// Converte qualquer HTML de capítulo em parágrafos literários XHTML 100% limpos (apenas o texto do livro, sem tags HTML sujas!)
+function convertChapterToCleanBookParagraphsXhtml(chapter: WorkChapter): string {
+  if (typeof DOMParser !== "undefined" && chapter.htmlContent) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(chapter.htmlContent, "text/html");
+
+    // Remover scripts, styles ou elementos de interface
+    doc
+      .querySelectorAll("script, style, nav, button, input")
+      .forEach((el) => el.remove());
+
+    const blockNodes = Array.from(
+      doc.body.querySelectorAll("p, blockquote, li, h1, h2, h3, h4")
+    ).filter(
+      (el) =>
+        el.querySelectorAll("p, blockquote, li, h1, h2, h3, h4").length === 0
+    );
+
+    if (blockNodes.length > 0) {
+      const cleanParagraphs: string[] = [];
+      for (const node of blockNodes) {
+        const rawText = (node.textContent || "").replace(/\s+/g, " ").trim();
+        if (!rawText) continue;
+        // Evitar repetir o título do capítulo se o primeiro elemento já for igual ao título
+        if (
+          cleanParagraphs.length === 0 &&
+          rawText.toLowerCase() === chapter.title.trim().toLowerCase()
+        ) {
+          continue;
+        }
+        cleanParagraphs.push(`    <p>${escapeXml(rawText)}</p>`);
+      }
+      if (cleanParagraphs.length > 0) {
+        return cleanParagraphs.join("\n");
+      }
+    }
+  }
+
+  // Fallback a partir do plainText puro
+  const plain = (chapter.plainText || "")
+    .replace(/<[^>]*>/g, " ")
+    .trim();
+
+  const lines = plain
+    .split(/\n+/)
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    return `    <p></p>`;
+  }
+
+  return lines.map((line) => `    <p>${escapeXml(line)}</p>`).join("\n");
+}
+
+// Garante que o livro inteiro (título, sinopse e TODOS os capítulos) esteja traduzido para Português antes de exportar
 export async function ensureWorkFullyTranslatedForExport(
   work: WorkItem,
   sourceLang: SourceLangCode = "auto",
   onProgress?: (msg: string) => void
 ): Promise<WorkItem> {
-  // Se já tem todos os capítulos traduzidos salvos no banco, usa direto!
   if (
     work.translatedChaptersPt &&
     work.translatedChaptersPt.length === work.chapters.length &&
-    work.translatedTitlePt &&
-    work.translatedSummaryPt
+    work.translatedTitlePt
   ) {
     onProgress?.("Usando tradução completa salva no banco local...");
     return {
       ...work,
       title: work.translatedTitlePt,
-      summary: work.translatedSummaryPt,
-      language: "Português (Traduzido)",
+      summary: work.translatedSummaryPt || work.summary,
+      language: "pt-BR",
       chapters: work.translatedChaptersPt,
     };
   }
 
-  onProgress?.("Traduzindo título, sinopse e tags...");
+  onProgress?.("Traduzindo título e sinopse...");
   const [translatedTitle, translatedSummary] =
     await translateStringsBatchNeural(
       [work.title, work.summary || ""],
       sourceLang
     );
-
-  const translatedFreeforms =
-    work.tags.freeforms.length > 0
-      ? await translateStringsBatchNeural(work.tags.freeforms, sourceLang)
-      : [];
-
-  const translatedWarnings =
-    work.tags.warnings.length > 0
-      ? await translateStringsBatchNeural(work.tags.warnings, sourceLang)
-      : [];
 
   const translatedChapters: WorkChapter[] = [];
   for (let i = 0; i < work.chapters.length; i++) {
@@ -73,7 +124,6 @@ export async function ensureWorkFullyTranslatedForExport(
     translatedChapters.push(refined);
   }
 
-  // Salvar no IndexedDB do livro para que não precise traduzir novamente no futuro
   await db.works.update(work.id, {
     translatedTitlePt: translatedTitle || work.title,
     translatedSummaryPt: translatedSummary || work.summary,
@@ -84,127 +134,12 @@ export async function ensureWorkFullyTranslatedForExport(
     ...work,
     title: translatedTitle || work.title,
     summary: translatedSummary || work.summary,
-    language: "Português (PT-BR)",
-    tags: {
-      ...work.tags,
-      warnings:
-        translatedWarnings.length > 0 ? translatedWarnings : work.tags.warnings,
-      freeforms:
-        translatedFreeforms.length > 0
-          ? translatedFreeforms
-          : work.tags.freeforms,
-    },
+    language: "pt-BR",
     chapters: translatedChapters,
   };
 }
 
-export function generateAo3HtmlDocument(
-  work: WorkItem,
-  highlights: Array<{ selectedText: string; note?: string; color: string }> = []
-): string {
-  const chaptersHtml = work.chapters
-    .map(
-      (ch, idx) => `
-    <div class="chapter" id="chapter-${idx + 1}">
-      <div class="chapter-preface">
-        <h2 class="title">${ch.title}</h2>
-      </div>
-      <div class="userstuff">
-        ${ch.htmlContent}
-      </div>
-    </div>`
-    )
-    .join("\n<hr/>\n");
-
-  const highlightsHtml =
-    highlights.length > 0
-      ? `<div id="annotations" style="margin-top:40px; padding:16px; border:1px solid #ccc; background:#fafafa;">
-          <h3>Destaques & Anotações Pessoais (${highlights.length})</h3>
-          <ul>
-            ${highlights
-              .map(
-                (h) =>
-                  `<li><strong>"${h.selectedText}"</strong> ${
-                    h.note ? `— <em>Nota: ${h.note}</em>` : ""
-                  }</li>`
-              )
-              .join("")}
-          </ul>
-        </div>`
-      : "";
-
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8" />
-  <title>${work.title} - ${work.author} [Arquivo de Nossa Autoria]</title>
-  <style>
-    body { font-family: Georgia, serif; max-width: 800px; margin: 32px auto; padding: 0 20px; color: #2a2a2a; line-height: 1.65; }
-    #preface { border-bottom: 2px solid #990000; padding-bottom: 20px; margin-bottom: 30px; font-family: "Lucida Grande", sans-serif; }
-    h1.heading { color: #990000; margin-bottom: 4px; }
-    dl.tags { display: grid; grid-template-columns: 180px 1fr; gap: 6px 12px; font-size: 13px; background: #f7f7f7; padding: 12px; border: 1px solid #ddd; }
-    dt { font-weight: bold; }
-    dd { margin: 0; }
-    blockquote.userstuff { border-left: 3px solid #990000; padding-left: 12px; margin: 12px 0; color: #333; }
-    .chapter h2.title { font-family: "Lucida Grande", sans-serif; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
-  </style>
-</head>
-<body>
-  <div id="preface">
-    <h1 class="heading">${work.title}</h1>
-    <p>por <a rel="author">${work.author}</a></p>
-    <dl class="tags">
-      <dt>Fandom:</dt><dd>${work.fandoms.join(", ")}</dd>
-      <dt>Classificação:</dt><dd>${work.rating.toUpperCase()}</dd>
-      <dt>Avisos de Arquivo:</dt><dd>${work.tags.warnings.join(", ")}</dd>
-      <dt>Categoria:</dt><dd>${work.category.toUpperCase()}</dd>
-      <dt>Relacionamentos:</dt><dd>${work.tags.relationships.join(", ")}</dd>
-      <dt>Personagens:</dt><dd>${work.tags.characters.join(", ")}</dd>
-      <dt>Tags Adicionais:</dt><dd>${work.tags.freeforms.join(", ")}</dd>
-      <dt>Estatísticas:</dt><dd>Idioma: ${work.language} | Palavras: ${work.wordCount} | Capítulos: ${work.chaptersCurrent}/${work.chaptersTotal ?? "?"}</dd>
-    </dl>
-    <div class="summary">
-      <p><strong>Sinopse:</strong></p>
-      <blockquote class="userstuff"><p>${work.summary.replace(/\n/g, "</p><p>")}</p></blockquote>
-    </div>
-  </div>
-  <div id="chapters">
-    ${chaptersHtml}
-  </div>
-  ${highlightsHtml}
-</body>
-</html>`;
-}
-
-export async function exportWorkAsHtmlAO3(
-  work: WorkItem,
-  options?: {
-    exportTranslatedPt?: boolean;
-    sourceLang?: SourceLangCode;
-    onProgress?: (msg: string) => void;
-  }
-) {
-  const targetWork = options?.exportTranslatedPt
-    ? await ensureWorkFullyTranslatedForExport(
-        work,
-        options.sourceLang || "auto",
-        options.onProgress
-      )
-    : work;
-
-  const highlights = await db.highlights
-    .where("workId")
-    .equals(work.id)
-    .toArray();
-  const html = generateAo3HtmlDocument(targetWork, highlights);
-  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-  const suffix = options?.exportTranslatedPt ? " [PT-BR]" : "";
-  triggerBrowserDownload(
-    blob,
-    `${sanitizeFilename(targetWork.title)} - ${targetWork.author}${suffix}.html`
-  );
-}
-
+// Exporta um arquivo .EPUB de livro verdadeiro (apenas o texto literário limpo, sem tags AO3 e sem código HTML aparente!)
 export async function exportWorkAsEpub(
   work: WorkItem,
   options?: {
@@ -222,8 +157,11 @@ export async function exportWorkAsEpub(
     : work;
 
   const zip = new JSZip();
+
+  // 1. mimetype precisa ser o primeiro arquivo e sem compressão (padrão IDPF EPUB)
   zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
 
+  // 2. META-INF/container.xml
   zip.folder("META-INF")?.file(
     "container.xml",
     `<?xml version="1.0" encoding="UTF-8"?>
@@ -235,55 +173,165 @@ export async function exportWorkAsEpub(
   );
 
   const oebps = zip.folder("OEBPS")!;
-  const manifestItems: string[] = [];
-  const spineItems: string[] = [];
 
+  // 3. Folha de estilo literária limpa (Tipografia de livro real)
+  oebps.file(
+    "style.css",
+    `body {
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1.65;
+  margin: 5% 6%;
+  color: #111111;
+}
+.title-page {
+  text-align: center;
+  margin-top: 22%;
+}
+.book-title {
+  font-size: 2em;
+  font-weight: bold;
+  margin-bottom: 0.4em;
+}
+.book-author {
+  font-size: 1.15em;
+  font-style: italic;
+  margin-bottom: 2em;
+}
+.book-synopsis {
+  font-size: 0.95em;
+  text-align: justify;
+  margin-top: 2.5em;
+  border-top: 1px solid #cccccc;
+  padding-top: 1.2em;
+}
+h1.chapter-title {
+  font-size: 1.4em;
+  text-align: center;
+  margin-top: 1.5em;
+  margin-bottom: 1.5em;
+  font-weight: bold;
+}
+p {
+  margin-top: 0;
+  margin-bottom: 0.85em;
+  text-indent: 1.4em;
+  text-align: justify;
+}
+`
+  );
+
+  // 4. Página de Rosto Limpa (Apenas Título, Autor e Sinopse limpa se houver — sem quadro de tags!)
+  const safeBookTitle = escapeXml(targetWork.title);
+  const safeAuthor = escapeXml(targetWork.author);
+  const cleanSynopsisParagraphs = (targetWork.summary || "")
+    .replace(/<[^>]*>/g, " ")
+    .split(/\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => `      <p>${escapeXml(s)}</p>`)
+    .join("\n");
+
+  oebps.file(
+    "titlepage.xhtml",
+    `<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="pt-BR">
+<head>
+  <meta http-equiv="Content-Type" content="application/xhtml+xml; charset=utf-8" />
+  <title>${safeBookTitle}</title>
+  <link rel="stylesheet" type="text/css" href="style.css" />
+</head>
+<body>
+  <div class="title-page">
+    <div class="book-title">${safeBookTitle}</div>
+    <div class="book-author">${safeAuthor}</div>
+  </div>
+  ${
+    cleanSynopsisParagraphs
+      ? `<div class="book-synopsis">\n${cleanSynopsisParagraphs}\n  </div>`
+      : ""
+  }
+</body>
+</html>`
+  );
+
+  const manifestItems: string[] = [
+    `<item id="css" href="style.css" media-type="text/css"/>`,
+    `<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>`,
+    `<item id="titlepage" href="titlepage.xhtml" media-type="application/xhtml+xml"/>`,
+  ];
+  const spineItems: string[] = [`<itemref idref="titlepage"/>`];
+  const navPoints: string[] = [];
+
+  // 5. Gerar cada capítulo apenas com o texto limpo do livro
   targetWork.chapters.forEach((ch, idx) => {
     const fileName = `chapter_${idx + 1}.xhtml`;
+    const itemId = `ch${idx + 1}`;
+    const safeChTitle = escapeXml(ch.title || `Capítulo ${idx + 1}`);
+    const cleanParagraphsXhtml = convertChapterToCleanBookParagraphsXhtml(ch);
+
     manifestItems.push(
-      `<item id="ch${idx + 1}" href="${fileName}" media-type="application/xhtml+xml"/>`
+      `<item id="${itemId}" href="${fileName}" media-type="application/xhtml+xml"/>`
     );
-    spineItems.push(`<itemref idref="ch${idx + 1}"/>`);
+    spineItems.push(`<itemref idref="${itemId}"/>`);
+    navPoints.push(`    <navPoint id="navPoint-${idx + 1}" playOrder="${idx + 1}">
+      <navLabel><text>${safeChTitle}</text></navLabel>
+      <content src="${fileName}"/>
+    </navPoint>`);
 
     oebps.file(
       fileName,
       `<?xml version="1.0" encoding="utf-8"?>
-<!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>${ch.title}</title></head>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="pt-BR">
+<head>
+  <meta http-equiv="Content-Type" content="application/xhtml+xml; charset=utf-8" />
+  <title>${safeChTitle}</title>
+  <link rel="stylesheet" type="text/css" href="style.css" />
+</head>
 <body>
-  <h2>${ch.title}</h2>
-  ${ch.htmlContent}
+  <h1 class="chapter-title">${safeChTitle}</h1>
+${cleanParagraphsXhtml}
 </body>
 </html>`
     );
   });
 
-  const allSubjects = [
-    ...targetWork.fandoms,
-    ...targetWork.tags.relationships,
-    ...targetWork.tags.characters,
-    ...targetWork.tags.freeforms,
-  ]
-    .map((s) => `<dc:subject>${s.replace(/[<>&]/g, "")}</dc:subject>`)
-    .join("\n    ");
+  // 6. Sumário NCX (para navegação de capítulos no Kindle/Kobo/Leitores EPUB)
+  oebps.file(
+    "toc.ncx",
+    `<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head>
+    <meta name="dtb:uid" content="urn:uuid:${targetWork.id}"/>
+    <meta name="dtb:depth" content="1"/>
+    <meta name="dtb:totalPageCount" content="0"/>
+    <meta name="dtb:maxPageNumber" content="0"/>
+  </head>
+  <docTitle><text>${safeBookTitle}</text></docTitle>
+  <navMap>
+${navPoints.join("\n")}
+  </navMap>
+</ncx>`
+  );
 
+  // 7. Manifesto OPF limpo (apenas metadados essenciais do livro)
   oebps.file(
     "content.opf",
     `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>${targetWork.title.replace(/[<>&]/g, "")}</dc:title>
-    <dc:creator>${targetWork.author.replace(/[<>&]/g, "")}</dc:creator>
-    <dc:language>${options?.exportTranslatedPt ? "pt-BR" : targetWork.language}</dc:language>
-    <dc:description>${targetWork.summary.replace(/[<>&]/g, "")}</dc:description>
-    ${allSubjects}
+    <dc:title>${safeBookTitle}</dc:title>
+    <dc:creator>${safeAuthor}</dc:creator>
+    <dc:language>${
+      options?.exportTranslatedPt ? "pt-BR" : escapeXml(targetWork.language)
+    }</dc:language>
     <dc:identifier id="BookId">urn:uuid:${targetWork.id}</dc:identifier>
   </metadata>
   <manifest>
     ${manifestItems.join("\n    ")}
   </manifest>
-  <spine>
+  <spine toc="ncx">
     ${spineItems.join("\n    ")}
   </spine>
 </package>`
@@ -293,11 +341,24 @@ export async function exportWorkAsEpub(
     type: "blob",
     mimeType: "application/epub+zip",
   });
-  const suffix = options?.exportTranslatedPt ? " [PT-BR]" : "";
+  const suffix = options?.exportTranslatedPt ? " (PT-BR)" : "";
   triggerBrowserDownload(
     blob,
     `${sanitizeFilename(targetWork.title)}${suffix}.epub`
   );
+}
+
+// Exporta também como Texto Limpo de Livro se o usuário escolher .HTML ou .ZIP
+export async function exportWorkAsHtmlAO3(
+  work: WorkItem,
+  options?: {
+    exportTranslatedPt?: boolean;
+    sourceLang?: SourceLangCode;
+    onProgress?: (msg: string) => void;
+  }
+) {
+  // Por padrão, redirecionar para o EPUB limpo de livro conforme pedido pelo usuário
+  await exportWorkAsEpub(work, options);
 }
 
 export async function exportWorkBundleZip(
@@ -308,55 +369,7 @@ export async function exportWorkBundleZip(
     onProgress?: (msg: string) => void;
   }
 ) {
-  const targetWork = options?.exportTranslatedPt
-    ? await ensureWorkFullyTranslatedForExport(
-        work,
-        options.sourceLang || "auto",
-        options.onProgress
-      )
-    : work;
-
-  const zip = new JSZip();
-  const highlights = await db.highlights
-    .where("workId")
-    .equals(work.id)
-    .toArray();
-  const bookmarks = await db.bookmarks
-    .where("workId")
-    .equals(work.id)
-    .toArray();
-  const pinnedPages = await db.pinnedPages
-    .where("workId")
-    .equals(work.id)
-    .toArray();
-
-  const metadataJson = {
-    exportedAt: new Date().toISOString(),
-    isTranslatedToPortuguese: !!options?.exportTranslatedPt,
-    work: { ...targetWork, rawFileBlob: undefined },
-    highlights,
-    bookmarks,
-    pinnedPages,
-  };
-
-  zip.file("metadata-tags-anotacoes.json", JSON.stringify(metadataJson, null, 2));
-  zip.file(
-    `${sanitizeFilename(targetWork.title)}${
-      options?.exportTranslatedPt ? "_PT-BR" : ""
-    }.html`,
-    generateAo3HtmlDocument(targetWork, highlights)
-  );
-
-  if (work.rawFileBlob && work.fileName) {
-    zip.file(`original_${work.fileName}`, work.rawFileBlob as Blob);
-  }
-
-  const blob = await zip.generateAsync({ type: "blob" });
-  const suffix = options?.exportTranslatedPt ? "_traduzido_PT-BR" : "";
-  triggerBrowserDownload(
-    blob,
-    `${sanitizeFilename(targetWork.title)}${suffix}_pacote_ao3.zip`
-  );
+  await exportWorkAsEpub(work, options);
 }
 
 export async function exportEntireLibraryBackup() {
