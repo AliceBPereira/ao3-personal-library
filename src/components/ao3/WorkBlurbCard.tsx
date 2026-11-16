@@ -11,6 +11,7 @@ import {
 } from "@/core/services/readingMetrics";
 import { useLibraryStore } from "@/store/useLibraryStore";
 import { READER_THEMES, useReaderStore } from "@/store/useReaderStore";
+import { translatePlainStringOffline } from "@/core/services/offlineTranslator";
 import {
   BookOpen,
   Download,
@@ -40,8 +41,15 @@ export function WorkBlurbCard({
   onManageCollections,
 }: WorkBlurbCardProps) {
   const { toggleIncludeTag, includeTags, setActiveFandom } = useLibraryStore();
-  const { wpm, theme } = useReaderStore();
+  const { wpm, theme, translateToPt, sourceLang } = useReaderStore();
   const activeTheme = READER_THEMES[theme] || READER_THEMES.cream;
+
+  const displayedTitle = translateToPt
+    ? translatePlainStringOffline(work.title, sourceLang)
+    : work.title;
+  const displayedSummary = translateToPt
+    ? translatePlainStringOffline(work.summary, sourceLang)
+    : work.summary;
 
   const estimatedTime = formatReadingTime(work.wordCount, wpm);
   const workShelves = collections.filter((c) => work.collectionIds.includes(c.id));
@@ -88,7 +96,7 @@ export function WorkBlurbCard({
                 className="underline transition-colors px-0.5 -mx-0.5 font-medium hover:opacity-80"
                 style={{ color: activeTheme.accent }}
               >
-                {work.title}
+                {displayedTitle}
               </Link>{" "}
               <span style={{ color: activeTheme.muted }}>por</span>{" "}
               <button
@@ -174,7 +182,9 @@ export function WorkBlurbCard({
                 }}
                 title={`Clique para filtrar pela tag (${entry.type}): ${entry.text}`}
               >
-                {entry.text}
+                {translateToPt
+                  ? translatePlainStringOffline(entry.text, sourceLang)
+                  : entry.text}
               </button>
               {idx < allTagEntries.length - 1 && (
                 <span style={{ color: activeTheme.muted }}>, </span>
@@ -192,7 +202,7 @@ export function WorkBlurbCard({
           borderColor: activeTheme.border,
         }}
       >
-        {work.summary.split("\n\n").map((paragraph, pIdx) => (
+        {displayedSummary.split("\n\n").map((paragraph, pIdx) => (
           <p key={pIdx} className="whitespace-pre-line">
             {paragraph}
           </p>

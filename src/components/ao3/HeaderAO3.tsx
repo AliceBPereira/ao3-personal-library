@@ -5,11 +5,13 @@ import Link from "next/link";
 import { useLibraryStore } from "@/store/useLibraryStore";
 import { READER_THEMES, useReaderStore } from "@/store/useReaderStore";
 import { ReaderThemeId } from "@/types/work";
+import { SourceLangCode } from "@/core/services/offlineTranslator";
 import { exportEntireLibraryBackup } from "@/core/exporters/libraryExporter";
 import {
   BookPlus,
   DownloadCloud,
   FolderHeart,
+  Languages,
   Library,
   Palette,
   Search,
@@ -26,7 +28,14 @@ export function HeaderAO3({
   onOpenShelvesModal,
 }: HeaderAO3Props) {
   const { searchQuery, setSearchQuery, resetAllFilters } = useLibraryStore();
-  const { theme, setTheme } = useReaderStore();
+  const {
+    theme,
+    setTheme,
+    translateToPt,
+    sourceLang,
+    setTranslateToPt,
+    setSourceLang,
+  } = useReaderStore();
   const [showThemePicker, setShowThemePicker] = useState(false);
 
   const activeTheme = READER_THEMES[theme] || READER_THEMES.cream;
@@ -40,7 +49,7 @@ export function HeaderAO3({
         color: activeTheme.text,
       }}
     >
-      {/* Topo com Logo AO3 + Ações + Seletor Global de Tema */}
+      {/* Topo com Logo AO3 + Ações + Tradutor Instantâneo + Seletor Global de Tema */}
       <div className="max-w-[1360px] mx-auto px-4 py-2 flex flex-wrap items-center justify-between gap-3">
         <Link
           href="/"
@@ -71,6 +80,73 @@ export function HeaderAO3({
 
         {/* Botões rápidos no canto superior direito */}
         <div className="flex flex-wrap items-center gap-2 text-[12px]">
+          {/* Pílula Estilo Google Translate (Original | Português) */}
+          <div
+            className="inline-flex items-center rounded-sm border overflow-hidden"
+            style={{
+              borderColor: translateToPt
+                ? activeTheme.accent
+                : activeTheme.border,
+              backgroundColor: activeTheme.bg,
+            }}
+            title="Traduzir página inteira instantaneamente (Original ↔ Português)"
+          >
+            <span
+              className="px-1.5 py-1 flex items-center gap-1 text-[11px]"
+              style={{ color: activeTheme.muted }}
+            >
+              <Languages className="w-3.5 h-3.5" />
+              <select
+                value={sourceLang}
+                onChange={(e) => {
+                  setSourceLang(e.target.value as SourceLangCode);
+                  setTranslateToPt(true);
+                }}
+                className="bg-transparent text-[11px] focus:outline-none cursor-pointer"
+                style={{ color: activeTheme.text }}
+              >
+                <option value="auto">Auto</option>
+                <option value="en">EN</option>
+                <option value="ru">RU</option>
+                <option value="es">ES</option>
+              </select>
+            </span>
+
+            <button
+              type="button"
+              onClick={() => setTranslateToPt(false)}
+              className={`px-2 py-1 text-[11.5px] border-l transition-colors ${
+                !translateToPt ? "font-bold" : "opacity-75"
+              }`}
+              style={{
+                borderColor: activeTheme.border,
+                backgroundColor: !translateToPt
+                  ? activeTheme.surface
+                  : activeTheme.bg,
+                color: activeTheme.text,
+              }}
+            >
+              Original
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setTranslateToPt(true)}
+              className={`px-2.5 py-1 text-[11.5px] border-l transition-colors ${
+                translateToPt ? "font-bold" : "opacity-80"
+              }`}
+              style={{
+                borderColor: activeTheme.border,
+                backgroundColor: translateToPt
+                  ? activeTheme.accent
+                  : activeTheme.bg,
+                color: translateToPt ? "#ffffff" : activeTheme.text,
+              }}
+            >
+              Português
+            </button>
+          </div>
+
           <button
             type="button"
             onClick={onOpenImportModal}
@@ -95,7 +171,7 @@ export function HeaderAO3({
               className="w-4 h-4"
               style={{ color: activeTheme.accent }}
             />
-            Coleções / Prateleiras
+            Coleções
           </button>
 
           <button
@@ -143,7 +219,8 @@ export function HeaderAO3({
         >
           <div className="flex items-center justify-between mb-2 text-[12.5px]">
             <span className="font-bold">
-              Escolha o Tema do Site e do Leitor (Sincronizado em todas as páginas):
+              Escolha o Tema do Site e do Leitor (Sincronizado em todas as
+              páginas):
             </span>
             <button
               type="button"

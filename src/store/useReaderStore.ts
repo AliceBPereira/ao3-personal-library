@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { NavigationMode, ReaderThemeId } from "@/types/work";
+import { SourceLangCode } from "@/core/services/offlineTranslator";
 
 export interface ReaderThemeDefinition {
   id: ReaderThemeId;
@@ -86,11 +87,14 @@ export const READER_THEMES: Record<ReaderThemeId, ReaderThemeDefinition> = {
 interface ReaderStore {
   theme: ReaderThemeId;
   navigationMode: NavigationMode;
-  fontSize: number; // em px (14 a 28)
-  lineHeight: number; // 1.4 a 2.2
-  maxWidth: number; // em px (600 a 1000)
+  fontSize: number;
+  lineHeight: number;
+  maxWidth: number;
   fontFamily: "serif" | "sans" | "mono";
-  wpm: number; // Velocidade de leitura em palavras por minuto
+  wpm: number;
+  // Estado global de tradução estilo Google Translate (vale para a página aberta sem criar arquivos)
+  translateToPt: boolean;
+  sourceLang: SourceLangCode;
   setTheme: (theme: ReaderThemeId) => void;
   setNavigationMode: (mode: NavigationMode) => void;
   setFontSize: (size: number) => void;
@@ -98,6 +102,8 @@ interface ReaderStore {
   setMaxWidth: (w: number) => void;
   setFontFamily: (ff: "serif" | "sans" | "mono") => void;
   setWpm: (wpm: number) => void;
+  setTranslateToPt: (enabled: boolean) => void;
+  setSourceLang: (lang: SourceLangCode) => void;
 }
 
 export const useReaderStore = create<ReaderStore>()(
@@ -110,6 +116,8 @@ export const useReaderStore = create<ReaderStore>()(
       maxWidth: 760,
       fontFamily: "serif",
       wpm: 230,
+      translateToPt: false,
+      sourceLang: "auto",
       setTheme: (theme) => set({ theme }),
       setNavigationMode: (navigationMode) => set({ navigationMode }),
       setFontSize: (fontSize) => set({ fontSize }),
@@ -117,6 +125,8 @@ export const useReaderStore = create<ReaderStore>()(
       setMaxWidth: (maxWidth) => set({ maxWidth }),
       setFontFamily: (fontFamily) => set({ fontFamily }),
       setWpm: (wpm) => set({ wpm }),
+      setTranslateToPt: (translateToPt) => set({ translateToPt }),
+      setSourceLang: (sourceLang) => set({ sourceLang }),
     }),
     {
       name: "ao3-reader-preferences",

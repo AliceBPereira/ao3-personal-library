@@ -14,9 +14,9 @@ import {
 import { READER_THEMES, useReaderStore } from "@/store/useReaderStore";
 import { calculateRealtimeMetrics } from "@/core/services/readingMetrics";
 import {
-  OfflineTranslationProgress,
+  refineChapterTranslationSilently,
   SourceLangCode,
-  translateEntireWorkOffline,
+  translateHtmlInstantInPlace,
   translatePlainStringOffline,
 } from "@/core/services/offlineTranslator";
 import { StatusIconsGrid } from "@/components/ao3/StatusIconsGrid";
@@ -24,7 +24,6 @@ import {
   ArrowLeft,
   Bookmark,
   BookOpen,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -39,7 +38,6 @@ import {
   ScrollText,
   Sparkles,
   Trash2,
-  WifiOff,
   X,
 } from "lucide-react";
 
@@ -67,7 +65,7 @@ const HIGHLIGHT_COLORS: Array<{
   { id: "amber", label: "Âmbar", bg: "#fde68a", border: "#d97706" },
 ];
 
-const COLUMN_GAP = 64; // Espaço entre colunas virtuais na Paginação
+const COLUMN_GAP = 64;
 
 export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const {
@@ -78,6 +76,8 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     maxWidth,
     fontFamily,
     wpm,
+    translateToPt,
+    sourceLang,
     setTheme,
     setNavigationMode,
     setFontSize,
@@ -85,6 +85,8 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     setMaxWidth,
     setFontFamily,
     setWpm,
+    setTranslateToPt,
+    setSourceLang,
   } = useReaderStore();
 
   const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
@@ -99,17 +101,11 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const [showAppearanceMenu, setShowAppearanceMenu] = useState(false);
   const [showHighlightsDrawer, setShowHighlightsDrawer] = useState(false);
   const [showPinnedModal, setShowPinnedModal] = useState(false);
-  const [showTranslatorModal, setShowTranslatorModal] = useState(false);
 
-  // Estado de Tradução Offline do Livro Inteiro
-  const [sourceLang, setSourceLang] = useState<SourceLangCode>("auto");
-  const [isTranslatingBook, setIsTranslatingBook] = useState(false);
-  const [translationProgress, setTranslationProgress] =
-    useState<OfflineTranslationProgress | null>(null);
-  const [translatedChaptersCache, setTranslatedChaptersCache] = useState<
-    WorkChapter[] | null
-  >(null);
-  const [isShowingTranslated, setIsShowingTranslated] = useState(false);
+  // Cache invisível de capítulos traduzidos (substitui o texto in-place igual ao Google Translate)
+  const [silentTranslatedMap, setSilentTranslatedMap] = useState<
+    Record<string, WorkChapter>
+  >({});
 
   // Estado de seleção de texto estilo Kindle
   const [selectedQuote, setSelectedQuote] = useState<string>("");
@@ -156,15 +152,90 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
   const activeTheme = READER_THEMES[theme] || READER_THEMES.cream;
 
-  const activeChaptersList = useMemo(() => {
-    if (isShowingTranslated && translatedChaptersCache) {
-      return translatedChaptersCache;
-    }
-    return work?.chapters || [];
-  }, [isShowingTranslated, translatedChaptersCache, work?.chapters]);
+  const rawChapters = work?.chapters || [];
+  const baseChapter =
+    rawChapters[currentChapterIndex] || rawChapters[0] || null;
 
-  const currentChapter =
-    activeChaptersList[currentChapterIndex] || activeChaptersList[0];
+  // Quando translateToPt está ativo:
+  // 1) Aplica a tradução instantânea in-place na mesma hora (0ms, sem sair da página/scroll atual)
+  // 2) Em background invisível, refina todas as frases do livro e guarda em cache silencioso
+  useEffect(() => {
+    if (!translateToPt || !work) return;
+    let cancelled = false;
+
+    const runSilentRefinement = async () => {
+      // Primeiro refinar o capítulo que o usuário está olhando agora
+      const currentOrig = work.chapters[currentChapterIndex];
+      if (currentOrig) {
+        const key = `${sourceLang}:${currentOrig.id}`;
+        if (!silentTranslatedMap[key]) {
+          const refined = await refineChapterTranslationSilently(
+            currentOrig,
+            sourceLang
+          );
+          if (!cancelled) {
+            setSilentTranslatedMap((prev) => ({ ...prev, [key]: refined }));
+          }
+        }
+      }
+
+      // Depois traduzir silenciosamente os demais capítulos do livro inteiro em background
+      for (const ch of work.chapters) {
+        if (cancelled) break;
+        const key = `${sourceLang}:${ch.id}`;
+        if (!silentTranslatedMap[key]) {
+          const refined = await refineChapterTranslationSilently(
+            ch,
+            sourceLang
+          );
+          if (!cancelled) {
+            setSilentTranslatedMap((prev) => ({ ...prev, [key]: refined }));
+          }
+        }
+      }
+    };
+
+    runSilentRefinement();
+    return () => {
+      cancelled = true;
+    };
+  }, [translateToPt, sourceLang, work, currentChapterIndex, silentTranslatedMap]);
+
+  // Capítulo ativo renderizado in-place (Original vs Traduzido na hora)
+  const currentChapter = useMemo<WorkChapter | null>(() => {
+    if (!baseChapter) return null;
+    if (!translateToPt) return baseChapter;
+
+    const key = `${sourceLang}:${baseChapter.id}`;
+    if (silentTranslatedMap[key]) {
+      return silentTranslatedMap[key];
+    }
+
+    // Tradução síncrona imediata enquanto o refinamento invisível roda
+    return {
+      ...baseChapter,
+      title: translatePlainStringOffline(baseChapter.title, sourceLang),
+      htmlContent: translateHtmlInstantInPlace(
+        baseChapter.htmlContent,
+        sourceLang
+      ),
+      plainText: translatePlainStringOffline(baseChapter.plainText, sourceLang),
+    };
+  }, [baseChapter, translateToPt, sourceLang, silentTranslatedMap]);
+
+  const displayedWorkTitle = useMemo(() => {
+    if (!work) return "";
+    return translateToPt
+      ? translatePlainStringOffline(work.title, sourceLang)
+      : work.title;
+  }, [work, translateToPt, sourceLang]);
+
+  const displayedSummary = useMemo(() => {
+    if (!work?.summary) return "";
+    return translateToPt
+      ? translatePlainStringOffline(work.summary, sourceLang)
+      : work.summary;
+  }, [work?.summary, translateToPt, sourceLang]);
 
   // Aplicar grifos visuais no HTML renderizado para os destaques salvos deste capítulo
   const chapterHighlights = useMemo(
@@ -196,6 +267,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   }, [currentChapter?.htmlContent, chapterHighlights]);
 
   // Medir a tela exata da Paginação e calcular quantas páginas o capítulo ocupa sem nenhum scroll vertical
+  // Mantendo a proporção da página atual quando o idioma é trocado!
   const measureKindlePagination = useCallback(() => {
     if (navigationMode !== "paginated") return;
     const vp = kindleViewportRef.current;
@@ -223,12 +295,11 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     }
   }, [navigationMode]);
 
-  // Recalcular paginação sempre que mudar tamanho da fonte, espaçamento, largura, capítulo, tradução ou redimensionar a tela
   useEffect(() => {
     if (navigationMode !== "paginated") return;
     const timer = setTimeout(() => {
       measureKindlePagination();
-    }, 40);
+    }, 30);
 
     const vp = kindleViewportRef.current;
     let observer: ResizeObserver | null = null;
@@ -253,7 +324,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     fontFamily,
     currentChapterIndex,
     decoratedChapterHtml,
-    isShowingTranslated,
+    translateToPt,
     viewingPinnedPage,
     returnAnchor,
     measureKindlePagination,
@@ -285,7 +356,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     }
   }, [work, navigationMode]);
 
-  // Quando o total de páginas for medido e houver progresso salvo, posicionar na página correspondente
   useEffect(() => {
     if (
       navigationMode === "paginated" &&
@@ -307,7 +377,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigationMode, totalPagesInChapter]);
 
-  // Calcular progresso efetivo (seja por scroll ou por página)
   const effectiveChapterPercent = useMemo(() => {
     if (navigationMode === "paginated") {
       if (totalPagesInChapter <= 1) return 100;
@@ -316,7 +385,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     return scrollPercent;
   }, [navigationMode, currentPageIndex, totalPagesInChapter, scrollPercent]);
 
-  // Salvar progresso no IndexedDB conforme o usuário avança
   useEffect(() => {
     if (!work) return;
     const timer = setTimeout(() => {
@@ -342,7 +410,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     totalPagesInChapter,
   ]);
 
-  // Ouvir rolagem da janela no modo scroll
   useEffect(() => {
     if (navigationMode !== "scroll") return;
     const handleScroll = () => {
@@ -383,7 +450,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     }
   }, [currentPageIndex, currentChapterIndex]);
 
-  // Atalhos de teclado (Setas Esquerda/Direita e Espaço para passar página no modo paginado)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (navigationMode !== "paginated") return;
@@ -406,7 +472,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [navigationMode, handleNextPage, handlePrevPage]);
 
-  // Detectar seleção de texto no leitor para abrir barra de destaque estilo Kindle
   const handleMouseUpSelection = () => {
     if (typeof window === "undefined") return;
     const sel = window.getSelection();
@@ -416,17 +481,14 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     }
   };
 
-  // Clique estilo Kindle na página (Esquerda = Volta, Direita = Avança, ignorando se o usuário estiver selecionando texto!)
   const handleKindleSurfaceClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (navigationMode !== "paginated") return;
 
-    // Se o usuário selecionou texto para destacar, não virar a página!
     const sel = window.getSelection();
     if (sel && sel.toString().trim().length > 0) {
       return;
     }
 
-    // Ignorar cliques em links, botões ou elementos interativos
     const target = e.target as HTMLElement;
     if (target.closest("button, a, input, select, textarea, mark")) {
       return;
@@ -440,37 +502,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       handlePrevPage();
     } else {
       handleNextPage();
-    }
-  };
-
-  // Executar Tradução 100% Offline de Todos os Capítulos do Livro
-  const handleRunFullOfflineTranslation = async (savePermanently: boolean) => {
-    if (!work) return;
-    setIsTranslatingBook(true);
-    try {
-      const translatedChapters = await translateEntireWorkOffline(
-        work.chapters,
-        sourceLang,
-        (prog) => setTranslationProgress(prog)
-      );
-
-      setTranslatedChaptersCache(translatedChapters);
-      setIsShowingTranslated(true);
-
-      if (savePermanently) {
-        const translatedSummary = translatePlainStringOffline(
-          work.summary,
-          sourceLang
-        );
-        await db.works.update(work.id, {
-          chapters: translatedChapters,
-          summary: translatedSummary,
-          language: `${work.language} → Português (Traduzido Offline)`,
-        });
-      }
-    } finally {
-      setIsTranslatingBook(false);
-      setTranslationProgress(null);
     }
   };
 
@@ -529,7 +560,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     setShowHighlightsDrawer(true);
   };
 
-  // Pular diretamente para um destaque ou marcador (Estilo Kindle)
   const jumpToPosition = (
     chapterIdx: number,
     pct: number,
@@ -563,7 +593,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     setShowHighlightsDrawer(false);
   };
 
-  // Fixar a página/capítulo atual como Página Especial (Mapa, Árvore Genealógica, Glossário)
   const handlePinCurrentPage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!work || !newPinTitle.trim()) return;
@@ -600,7 +629,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     reader.readAsDataURL(file);
   };
 
-  // Consultar uma Página Especial Fixada (salva onde o leitor estava para retorno em 1 clique!)
   const handleConsultSpecialPage = (pin: PinnedSpecialPage) => {
     if (!returnAnchor) {
       setReturnAnchor({
@@ -630,7 +658,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     setShowPinnedModal(false);
   };
 
-  // Retornar instantaneamente do Mapa/Glossário para a página onde a leitura estava
   const handleReturnFromSpecialPage = () => {
     if (!returnAnchor) return;
     const target = returnAnchor;
@@ -697,7 +724,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
         color: activeTheme.text,
       }}
     >
-      {/* ================= BARRA SUPERIOR DO LEITOR (FIXA E SEMPRE ACESSÍVEL EM QUALQUER SCROLL) ================= */}
+      {/* ================= BARRA SUPERIOR DO LEITOR (FIXA E SEMPRE ACESSÍVEL) ================= */}
       <header
         className="sticky top-0 left-0 right-0 shrink-0 z-40 border-b px-3 sm:px-6 py-2 transition-all shadow-sm"
         style={{
@@ -722,8 +749,8 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             </Link>
 
             <div className="min-w-0 hidden lg:block">
-              <h1 className="text-[13.5px] font-bold truncate leading-tight max-w-[240px]">
-                {work.title}
+              <h1 className="text-[13.5px] font-bold truncate leading-tight max-w-[230px]">
+                {displayedWorkTitle}
               </h1>
               <p
                 className="text-[10.5px] truncate"
@@ -733,7 +760,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               </p>
             </div>
 
-            {activeChaptersList.length > 1 && (
+            {rawChapters.length > 1 && (
               <select
                 value={currentChapterIndex}
                 onChange={(e) => {
@@ -751,16 +778,19 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                   borderColor: activeTheme.border,
                 }}
               >
-                {activeChaptersList.map((ch, idx) => (
+                {rawChapters.map((ch, idx) => (
                   <option key={ch.id} value={idx}>
-                    {idx + 1}. {ch.title}
+                    {idx + 1}.{" "}
+                    {translateToPt
+                      ? translatePlainStringOffline(ch.title, sourceLang)
+                      : ch.title}
                   </option>
                 ))}
               </select>
             )}
           </div>
 
-          {/* Direita: Alternador Paginação / Rolagem + Tradução Offline + Páginas Especiais + Destaques + Temas */}
+          {/* Direita: Paginação / Rolagem + Barra Google Translate Instantânea + Páginas Especiais + Destaques + Temas */}
           <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
             {/* Alternador Paginação vs Rolagem */}
             <div
@@ -806,27 +836,73 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               </button>
             </div>
 
-            {/* Botão de Tradução Offline (Inglês -> PT, Russo -> PT, Outros -> PT) */}
-            <button
-              type="button"
-              onClick={() => setShowTranslatorModal(true)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-sm border font-medium transition-colors"
+            {/* Pílula de Tradução Instantânea Estilo Google Translate (Original | Português) */}
+            <div
+              className="inline-flex items-center rounded-sm border overflow-hidden"
               style={{
-                borderColor: isShowingTranslated
+                borderColor: translateToPt
                   ? activeTheme.accent
                   : activeTheme.border,
-                backgroundColor: isShowingTranslated
-                  ? activeTheme.accent
-                  : activeTheme.bg,
-                color: isShowingTranslated ? "#ffffff" : activeTheme.text,
+                backgroundColor: activeTheme.bg,
               }}
-              title="Traduzir livro inteiro sem internet (Inglês → Português, Russo → Português e outras línguas)"
+              title="Tradução instantânea da página inteira (estilo Google Translate) mantendo exatamente onde você está lendo"
             >
-              <Languages className="w-3.5 h-3.5" />
-              <span>
-                {isShowingTranslated ? "Traduzido (PT-BR)" : "Traduzir Offline"}
+              <span
+                className="px-1.5 py-1 flex items-center gap-1 text-[11px]"
+                style={{ color: activeTheme.muted }}
+              >
+                <Languages className="w-3.5 h-3.5" />
+                <select
+                  value={sourceLang}
+                  onChange={(e) => {
+                    setSourceLang(e.target.value as SourceLangCode);
+                    setTranslateToPt(true);
+                  }}
+                  className="bg-transparent text-[11px] focus:outline-none cursor-pointer"
+                  style={{ color: activeTheme.text }}
+                  title="Idioma de origem (Auto, Inglês, Russo, Espanhol)"
+                >
+                  <option value="auto">Auto</option>
+                  <option value="en">EN</option>
+                  <option value="ru">RU</option>
+                  <option value="es">ES</option>
+                </select>
               </span>
-            </button>
+
+              <button
+                type="button"
+                onClick={() => setTranslateToPt(false)}
+                className={`px-2 py-1 text-[11.5px] border-l transition-colors ${
+                  !translateToPt ? "font-bold" : "opacity-75"
+                }`}
+                style={{
+                  borderColor: activeTheme.border,
+                  backgroundColor: !translateToPt
+                    ? activeTheme.surface
+                    : activeTheme.bg,
+                  color: activeTheme.text,
+                }}
+              >
+                Original
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setTranslateToPt(true)}
+                className={`px-2.5 py-1 text-[11.5px] border-l transition-colors ${
+                  translateToPt ? "font-bold" : "opacity-80"
+                }`}
+                style={{
+                  borderColor: activeTheme.border,
+                  backgroundColor: translateToPt
+                    ? activeTheme.accent
+                    : activeTheme.bg,
+                  color: translateToPt ? "#ffffff" : activeTheme.text,
+                }}
+              >
+                Português
+              </button>
+            </div>
 
             {/* Botão de Acesso Rápido: Páginas Especiais Fixadas */}
             <button
@@ -860,7 +936,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               <Bookmark className="w-3.5 h-3.5" />
             </button>
 
-            {/* Botão Painel de Destaques e Marcadores (Estilo Kindle) */}
+            {/* Botão Painel de Destaques e Marcadores */}
             <button
               type="button"
               onClick={() => setShowHighlightsDrawer(true)}
@@ -1201,8 +1277,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                   className="text-[11px] uppercase tracking-wider font-ao3Sans"
                   style={{ color: activeTheme.muted }}
                 >
-                  {work.title} • {work.author}{" "}
-                  {isShowingTranslated && "• [Traduzido para Português Offline]"}
+                  {displayedWorkTitle} • {work.author}
                 </div>
                 <h2
                   className="text-[1.2em] font-serif font-bold mt-0.5"
@@ -1223,11 +1298,22 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                   }}
                 >
                   <div className="font-bold text-[0.9em] mb-1">
-                    📌 {viewingPinnedPage.title}
+                    📌{" "}
+                    {translateToPt
+                      ? translatePlainStringOffline(
+                          viewingPinnedPage.title,
+                          sourceLang
+                        )
+                      : viewingPinnedPage.title}
                   </div>
                   {viewingPinnedPage.customHtmlOrNotes && (
                     <p className="text-[0.88em] whitespace-pre-line">
-                      {viewingPinnedPage.customHtmlOrNotes}
+                      {translateToPt
+                        ? translatePlainStringOffline(
+                            viewingPinnedPage.customHtmlOrNotes,
+                            sourceLang
+                          )
+                        : viewingPinnedPage.customHtmlOrNotes}
                     </p>
                   )}
                   {viewingPinnedPage.imageDataUrl && (
@@ -1257,7 +1343,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               handleNextPage();
             }}
             disabled={
-              currentChapterIndex === activeChaptersList.length - 1 &&
+              currentChapterIndex === rawChapters.length - 1 &&
               currentPageIndex >= totalPagesInChapter - 1
             }
             className="absolute right-1.5 sm:right-3 top-1/2 -translate-y-1/2 z-20 p-2 rounded-full border opacity-40 hover:opacity-100 disabled:opacity-10 transition-opacity"
@@ -1298,7 +1384,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                     className="text-[20px] font-serif font-bold leading-snug"
                     style={{ color: activeTheme.accent }}
                   >
-                    {work.title}
+                    {displayedWorkTitle}
                   </h2>
                   <p
                     className="text-[13px]"
@@ -1315,7 +1401,12 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 style={{ borderColor: activeTheme.border }}
               >
                 <div>
-                  <strong>Avisos:</strong> {work.tags.warnings.join(", ")}
+                  <strong>Avisos:</strong>{" "}
+                  {translateToPt
+                    ? work.tags.warnings
+                        .map((w) => translatePlainStringOffline(w, sourceLang))
+                        .join(", ")
+                    : work.tags.warnings.join(", ")}
                 </div>
                 {work.tags.relationships.length > 0 && (
                   <div>
@@ -1332,17 +1423,21 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 {work.tags.freeforms.length > 0 && (
                   <div>
                     <strong>Tags Adicionais:</strong>{" "}
-                    {work.tags.freeforms.join(", ")}
+                    {translateToPt
+                      ? work.tags.freeforms
+                          .map((t) => translatePlainStringOffline(t, sourceLang))
+                          .join(", ")
+                      : work.tags.freeforms.join(", ")}
                   </div>
                 )}
               </div>
 
-              {work.summary && (
+              {displayedSummary && (
                 <blockquote
                   className="mt-3 pt-2.5 border-t italic text-[12.5px]"
                   style={{ borderColor: activeTheme.border }}
                 >
-                  {work.summary}
+                  {displayedSummary}
                 </blockquote>
               )}
             </section>
@@ -1362,7 +1457,13 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                   style={{ color: activeTheme.accent }}
                 >
                   <MapPin className="w-4 h-4" />
-                  Página Especial de Referência: {viewingPinnedPage.title}
+                  Página Especial de Referência:{" "}
+                  {translateToPt
+                    ? translatePlainStringOffline(
+                        viewingPinnedPage.title,
+                        sourceLang
+                      )
+                    : viewingPinnedPage.title}
                 </span>
                 {returnAnchor && (
                   <button
@@ -1377,7 +1478,12 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               </div>
               {viewingPinnedPage.customHtmlOrNotes && (
                 <p className="text-[13.5px] whitespace-pre-line mb-3">
-                  {viewingPinnedPage.customHtmlOrNotes}
+                  {translateToPt
+                    ? translatePlainStringOffline(
+                        viewingPinnedPage.customHtmlOrNotes,
+                        sourceLang
+                      )
+                    : viewingPinnedPage.customHtmlOrNotes}
                 </p>
               )}
               {viewingPinnedPage.imageDataUrl && (
@@ -1444,7 +1550,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             <button
               type="button"
               onClick={async () => {
-                if (currentChapterIndex + 1 < activeChaptersList.length) {
+                if (currentChapterIndex + 1 < rawChapters.length) {
                   setCurrentChapterIndex((c) => c + 1);
                   window.scrollTo({ top: 0, behavior: "smooth" });
                 } else {
@@ -1472,7 +1578,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 borderColor: activeTheme.accent,
               }}
             >
-              {currentChapterIndex + 1 < activeChaptersList.length
+              {currentChapterIndex + 1 < rawChapters.length
                 ? "Próximo Capítulo →"
                 : "✓ Concluir Leitura (+1 Leitura)"}
             </button>
@@ -1497,7 +1603,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 style={{ color: activeTheme.accent }}
               />
               Cap. <strong>{currentChapterIndex + 1}</strong>/
-              {activeChaptersList.length}
+              {rawChapters.length}
             </span>
 
             {isPaginated ? (
@@ -1517,7 +1623,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             )}
           </div>
 
-          {/* Métricas de Tempo em Tempo Real */}
           <div className="flex flex-wrap items-center gap-3 sm:gap-5">
             <span className="inline-flex items-center gap-1">
               <Clock
@@ -1540,151 +1645,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
           </div>
         </div>
       </footer>
-
-      {/* ================= MODAL DE TRADUÇÃO 100% OFFLINE (INGLÊS / RUSSO / OUTRAS -> PORTUGUÊS) ================= */}
-      {showTranslatorModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 font-ao3Sans">
-          <div className="bg-white text-[#222] border-2 border-[#990000] w-full max-w-xl rounded-sm shadow-2xl overflow-hidden">
-            <div className="bg-[#990000] text-white px-4 py-3 flex items-center justify-between">
-              <h3 className="font-serif text-[16px] font-bold flex items-center gap-2">
-                <Languages className="w-4 h-4" />
-                Tradutor Offline de Livros Inteiros (Sem Internet)
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowTranslatorModal(false)}
-                className="p-1 hover:bg-[#700000] rounded-sm"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-4 text-[13px]">
-              <div className="flex items-start gap-2.5 p-3 bg-[#fdf8f8] border border-[#e6c5c5] rounded-sm text-[12px]">
-                <WifiOff className="w-5 h-5 text-[#990000] shrink-0 mt-0.5" />
-                <div>
-                  <strong>Funciona 100% Sem Internet:</strong> Traduz todos os{" "}
-                  <strong>{work.chapters.length} capítulo(s)</strong> deste
-                  livro diretamente no seu navegador usando o motor local
-                  embarcado (e a API neural local do navegador quando
-                  disponível), preservando parágrafos, itálicos e diálogos.
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-[#222] mb-1.5">
-                  Idioma de Origem → Para Português (PT-BR)
-                </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {(
-                    [
-                      {
-                        id: "auto",
-                        title: "Detectar Automaticamente → Português",
-                        desc: "Detecta Inglês, Russo (Cirílico) e textos mistos",
-                      },
-                      {
-                        id: "en",
-                        title: "Inglês (English) → Português",
-                        desc: "Ideal para fanfics e livros em inglês",
-                      },
-                      {
-                        id: "ru",
-                        title: "Russo (Русский) → Português",
-                        desc: "Traduz frases e vocabulário cirílico russo",
-                      },
-                      {
-                        id: "es",
-                        title: "Espanhol / Outras → Português",
-                        desc: "Tradução local de espanhol e termos latinos",
-                      },
-                    ] as const
-                  ).map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => setSourceLang(opt.id)}
-                      className={`p-2.5 rounded-sm border text-left transition-colors ${
-                        sourceLang === opt.id
-                          ? "border-[#990000] bg-[#fdf2f2] font-semibold"
-                          : "border-[#cccccc] bg-[#fafafa] hover:border-[#990000]"
-                      }`}
-                    >
-                      <div className="text-[12.5px] text-[#222]">
-                        {opt.title}
-                      </div>
-                      <div className="text-[11px] text-[#666] font-normal">
-                        {opt.desc}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Barra de Progresso durante a tradução */}
-              {isTranslatingBook && translationProgress && (
-                <div className="p-3 bg-[#f5f5f5] border border-[#ccc] rounded-sm space-y-1.5">
-                  <div className="flex justify-between text-[12px] font-medium">
-                    <span>{translationProgress.statusText}</span>
-                    <span>{translationProgress.percent}%</span>
-                  </div>
-                  <div className="w-full h-2 bg-[#ddd] rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-[#990000] transition-all"
-                      style={{ width: `${translationProgress.percent}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Alternador rápido se já houver tradução em memória */}
-              {translatedChaptersCache && (
-                <div className="p-3 bg-[#f0f9eb] border border-[#b7eb8f] rounded-sm flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-[#237804] text-[12px]">
-                    <CheckCircle2 className="w-4 h-4 shrink-0" />
-                    <span>
-                      Livro traduzido em memória! Você pode alternar entre o
-                      original e o português:
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsShowingTranslated((v) => !v)}
-                    className="px-3 py-1 bg-[#237804] text-white text-[11.5px] font-semibold rounded-sm shrink-0"
-                  >
-                    {isShowingTranslated
-                      ? "Ver Texto Original"
-                      : "Ver em Português"}
-                  </button>
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-[#ddd]">
-                <button
-                  type="button"
-                  disabled={isTranslatingBook}
-                  onClick={() => handleRunFullOfflineTranslation(false)}
-                  className="px-3.5 py-1.5 border border-[#990000] text-[#990000] hover:bg-[#fdf2f2] font-medium rounded-sm text-[12.5px] disabled:opacity-50"
-                >
-                  Traduzir para Leitura Atual
-                </button>
-
-                <button
-                  type="button"
-                  disabled={isTranslatingBook}
-                  onClick={async () => {
-                    await handleRunFullOfflineTranslation(true);
-                    setShowTranslatorModal(false);
-                  }}
-                  className="px-4 py-1.5 bg-[#990000] hover:bg-[#700000] text-white font-medium rounded-sm text-[12.5px] disabled:opacity-50"
-                >
-                  Traduzir e Salvar Livro Inteiro em Português (Offline)
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ================= DRAWER LATERAL: DESTAQUES & MARCADORES (ESTILO KINDLE) ================= */}
       {showHighlightsDrawer && (

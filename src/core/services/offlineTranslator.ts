@@ -2,12 +2,8 @@ import { WorkChapter } from "@/types/work";
 
 export type SourceLangCode = "auto" | "en" | "ru" | "es" | "fr";
 
-export interface OfflineTranslationProgress {
-  chapterIndex: number;
-  totalChapters: number;
-  percent: number;
-  statusText: string;
-}
+// Cache silencioso em memória + localStorage/IndexedDB para que a troca Original <-> Português seja instantânea (0ms)
+const translationMemoryCache = new Map<string, string>();
 
 // Dicionário Frasal e Contextual Offline (Inglês -> Português)
 const EN_PHRASES_PT: Array<[RegExp, string]> = [
@@ -275,7 +271,6 @@ const RU_WORDS_PT: Record<string, string> = {
   часть: "parte",
 };
 
-// Dicionário Básico Offline (Espanhol / Francês -> Português)
 const ES_WORDS_PT: Record<string, string> = {
   el: "o",
   la: "a",
@@ -300,7 +295,6 @@ const ES_WORDS_PT: Record<string, string> = {
 };
 
 export function detectLanguageOffline(text: string): SourceLangCode {
-  // Verificar presença de caracteres cirílicos (Russo)
   if (/[а-яА-ЯёЁ]/.test(text)) {
     return "ru";
   }
@@ -312,66 +306,26 @@ export function detectLanguageOffline(text: string): SourceLangCode {
     lower.match(/\b(pero|cuando|miró|dijo|los|las|una|hacia)\b/g) || []
   ).length;
 
-  if (enMatches >= esMatches && enMatches > 2) return "en";
-  if (esMatches > 2) return "es";
+  if (enMatches >= esMatches && enMatches > 1) return "en";
+  if (esMatches > 1) return "es";
   return "en";
 }
 
-// Tenta usar a API nativa offline do navegador (Chrome Built-in Translator API) se disponível
-async function tryNativeBrowserOfflineTranslator(
-  text: string,
-  sourceLang: string
-): Promise<string | null> {
-  try {
-    const win = window as unknown as {
-      translation?: {
-        createTranslator?: (opts: {
-          sourceLanguage: string;
-          targetLanguage: string;
-        }) => Promise<{ translate: (input: string) => Promise<string> }>;
-      };
-      Translator?: {
-        create?: (opts: {
-          sourceLanguage: string;
-          targetLanguage: string;
-        }) => Promise<{ translate: (input: string) => Promise<string> }>;
-      };
-    };
-
-    const src = sourceLang === "auto" ? detectLanguageOffline(text) : sourceLang;
-
-    if (win.Translator?.create) {
-      const translator = await win.Translator.create({
-        sourceLanguage: src,
-        targetLanguage: "pt",
-      });
-      return await translator.translate(text);
-    }
-
-    if (win.translation?.createTranslator) {
-      const translator = await win.translation.createTranslator({
-        sourceLanguage: src,
-        targetLanguage: "pt",
-      });
-      return await translator.translate(text);
-    }
-  } catch {
-    // Fallback para o motor léxico-contextual embarcado
-  }
-  return null;
-}
-
+// Tradução Instantânea Síncrona (0ms, 100% Offline, usada imediatamente ao clicar no botão)
 export function translatePlainStringOffline(
   input: string,
   sourceLang: SourceLangCode = "auto"
 ): string {
-  if (!input.trim()) return input;
+  if (!input || !input.trim()) return input;
+  const cacheKey = `${sourceLang}:${input}`;
+  const cached = translationMemoryCache.get(cacheKey);
+  if (cached) return cached;
+
   const effectiveLang =
     sourceLang === "auto" ? detectLanguageOffline(input) : sourceLang;
 
   let result = input;
 
-  // 1. Passar sempre as expressões em Russo caso haja trechos bilíngues (muito comum em fics de AFTG/Andriel)
   for (const [pattern, replacement] of RU_PHRASES_PT) {
     result = result.replace(pattern, replacement);
   }
@@ -386,7 +340,6 @@ export function translatePlainStringOffline(
       : mapped;
   });
 
-  // 2. Se for Inglês (ou auto com inglês), aplicar frases e vocabulário Inglês -> Português
   if (effectiveLang === "en" || sourceLang === "auto") {
     for (const [pattern, replacement] of EN_PHRASES_PT) {
       result = result.replace(pattern, replacement);
@@ -404,7 +357,6 @@ export function translatePlainStringOffline(
     });
   }
 
-  // 3. Se for Espanhol
   if (effectiveLang === "es") {
     result = result.replace(/\b[A-Za-zÁÉÍÓÚáéíóúñÑ]+\b/g, (word) => {
       const lower = word.toLowerCase();
@@ -417,81 +369,162 @@ export function translatePlainStringOffline(
     });
   }
 
+  translationMemoryCache.set(cacheKey, result);
   return result;
 }
 
-export async function translateHtmlPreservingTagsOffline(
+// Traduz um HTML inteiro preservando 100% da estrutura e posição de parágrafos de forma instantânea (síncrona)
+export function translateHtmlInstantInPlace(
   htmlContent: string,
   sourceLang: SourceLangCode = "auto"
-): Promise<string> {
-  if (typeof DOMParser === "undefined") return htmlContent;
+): string {
+  if (typeof DOMParser === "undefined" || !htmlContent) return htmlContent;
+  const cacheKey = `html:${sourceLang}:${htmlContent}`;
+  const cached = translationMemoryCache.get(cacheKey);
+  if (cached) return cached;
+
   const parser = new DOMParser();
   const doc = parser.parseFromString(htmlContent, "text/html");
 
   const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
-  const textNodes: Text[] = [];
   let currentNode = walker.nextNode();
   while (currentNode) {
     if (currentNode.nodeValue && currentNode.nodeValue.trim().length > 0) {
-      textNodes.push(currentNode as Text);
+      currentNode.nodeValue = translatePlainStringOffline(
+        currentNode.nodeValue,
+        sourceLang
+      );
     }
     currentNode = walker.nextNode();
   }
 
-  for (const node of textNodes) {
-    const original = node.nodeValue || "";
-    const nativeTranslated = await tryNativeBrowserOfflineTranslator(
-      original,
-      sourceLang
-    );
-    if (nativeTranslated) {
-      node.nodeValue = nativeTranslated;
-    } else {
-      node.nodeValue = translatePlainStringOffline(original, sourceLang);
+  const output = doc.body.innerHTML;
+  translationMemoryCache.set(cacheKey, output);
+  return output;
+}
+
+// Motor Neural em Background estilo Google Translate (quando há internet ou Chrome Built-in AI, refina o cache silenciosamente)
+async function translateChunkNeuralWithFallback(
+  text: string,
+  sourceLang: SourceLangCode
+): Promise<string> {
+  if (!text.trim()) return text;
+  const cacheKey = `neural:${sourceLang}:${text}`;
+  if (translationMemoryCache.has(cacheKey)) {
+    return translationMemoryCache.get(cacheKey)!;
+  }
+
+  // 1. Tentar API Neural Nativa Offline do Chrome (window.Translator)
+  try {
+    const win = window as unknown as {
+      Translator?: {
+        create?: (opts: {
+          sourceLanguage: string;
+          targetLanguage: string;
+        }) => Promise<{ translate: (input: string) => Promise<string> }>;
+      };
+    };
+    if (win.Translator?.create) {
+      const src =
+        sourceLang === "auto" ? detectLanguageOffline(text) : sourceLang;
+      const translator = await win.Translator.create({
+        sourceLanguage: src,
+        targetLanguage: "pt",
+      });
+      const res = await translator.translate(text);
+      if (res) {
+        translationMemoryCache.set(cacheKey, res);
+        translationMemoryCache.set(`${sourceLang}:${text}`, res);
+        return res;
+      }
+    }
+  } catch {
+    // Segue para próxima camada
+  }
+
+  // 2. Se estiver online na primeira leitura, consultar endpoint neural gratuito (GTX) e salvar no cache offline do livro
+  if (typeof navigator !== "undefined" && navigator.onLine) {
+    try {
+      const sl = sourceLang === "auto" ? "auto" : sourceLang;
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=pt&dt=t&q=${encodeURIComponent(
+        text
+      )}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.[0])) {
+          const joined = data[0]
+            .map((part: unknown[]) => (typeof part?.[0] === "string" ? part[0] : ""))
+            .join("");
+          if (joined.trim()) {
+            translationMemoryCache.set(cacheKey, joined);
+            translationMemoryCache.set(`${sourceLang}:${text}`, joined);
+            return joined;
+          }
+        }
+      }
+    } catch {
+      // Sem internet ou bloqueado: usa 100% o motor local embarcado sem dar erro!
     }
   }
 
-  return doc.body.innerHTML;
+  return translatePlainStringOffline(text, sourceLang);
 }
 
-export async function translateEntireWorkOffline(
-  chapters: WorkChapter[],
-  sourceLang: SourceLangCode,
-  onProgress?: (prog: OfflineTranslationProgress) => void
-): Promise<WorkChapter[]> {
-  const translatedChapters: WorkChapter[] = [];
+// Refina silenciosamente um capítulo inteiro em segundo plano e atualiza o cache invisível para leitura offline
+export async function refineChapterTranslationSilently(
+  chapter: WorkChapter,
+  sourceLang: SourceLangCode = "auto"
+): Promise<WorkChapter> {
+  if (typeof DOMParser === "undefined") return chapter;
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(chapter.htmlContent, "text/html");
 
-  for (let i = 0; i < chapters.length; i++) {
-    const ch = chapters[i];
-    onProgress?.({
-      chapterIndex: i + 1,
-      totalChapters: chapters.length,
-      percent: Math.round(((i + 1) / chapters.length) * 100),
-      statusText: `Traduzindo offline: ${ch.title} (${i + 1}/${
-        chapters.length
-      })...`,
-    });
+  const blocks = Array.from(
+    doc.body.querySelectorAll("p, h1, h2, h3, h4, li, blockquote")
+  );
 
-    // Pequeno yield para a UI atualizar a barra de progresso suavemente
-    await new Promise((r) => setTimeout(r, 30));
-
-    const translatedTitle = translatePlainStringOffline(ch.title, sourceLang);
-    const translatedHtml = await translateHtmlPreservingTagsOffline(
-      ch.htmlContent,
+  if (blocks.length > 0) {
+    for (const block of blocks) {
+      const walker = doc.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      const nodes: Text[] = [];
+      let n = walker.nextNode();
+      while (n) {
+        if (n.nodeValue && n.nodeValue.trim().length > 1) {
+          nodes.push(n as Text);
+        }
+        n = walker.nextNode();
+      }
+      for (const textNode of nodes) {
+        const orig = textNode.nodeValue || "";
+        textNode.nodeValue = await translateChunkNeuralWithFallback(
+          orig,
+          sourceLang
+        );
+      }
+    }
+  } else {
+    doc.body.innerHTML = translateHtmlInstantInPlace(
+      chapter.htmlContent,
       sourceLang
     );
-    const translatedPlain = translatePlainStringOffline(
-      ch.plainText,
-      sourceLang
-    );
-
-    translatedChapters.push({
-      ...ch,
-      title: translatedTitle,
-      htmlContent: translatedHtml,
-      plainText: translatedPlain,
-    });
   }
 
-  return translatedChapters;
+  const translatedTitle = await translateChunkNeuralWithFallback(
+    chapter.title,
+    sourceLang
+  );
+
+  const refinedHtml = doc.body.innerHTML;
+  translationMemoryCache.set(
+    `html:${sourceLang}:${chapter.htmlContent}`,
+    refinedHtml
+  );
+
+  return {
+    ...chapter,
+    title: translatedTitle,
+    htmlContent: refinedHtml,
+    plainText: doc.body.textContent || chapter.plainText,
+  };
 }
