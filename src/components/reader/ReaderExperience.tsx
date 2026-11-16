@@ -16,8 +16,8 @@ import { calculateRealtimeMetrics } from "@/core/services/readingMetrics";
 import {
   refineChapterTranslationSilently,
   SourceLangCode,
-  translateHtmlInstantInPlace,
   translatePlainStringOffline,
+  translateStringsBatchNeural,
 } from "@/core/services/offlineTranslator";
 import { StatusIconsGrid } from "@/components/ao3/StatusIconsGrid";
 import {
@@ -170,10 +170,11 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const [showHighlightsDrawer, setShowHighlightsDrawer] = useState(false);
   const [showPinnedModal, setShowPinnedModal] = useState(false);
 
-  // Cache invisível de capítulos traduzidos (substitui o texto in-place igual ao Google Translate)
+  // Cache invisível de capítulos traduzidos (substitui o texto in-place igual ao Google Translate e persiste no IndexedDB)
   const [silentTranslatedMap, setSilentTranslatedMap] = useState<
     Record<string, WorkChapter>
   >({});
+  const [isTranslatingNow, setIsTranslatingNow] = useState(false);
 
   // Estado de seleção de texto + Ajustador de Palavras Antes de Salvar/Copiar
   const [selectedQuote, setSelectedQuote] = useState<string>("");
@@ -226,38 +227,82 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const baseChapter =
     rawChapters[currentChapterIndex] || rawChapters[0] || null;
 
-  // Refinamento silencioso em background estilo Google Translate
+  // Tradução Neural Completa em Background (salva automaticamente no IndexedDB do livro para leitura offline!)
   useEffect(() => {
     if (!translateToPt || !work) return;
     let cancelled = false;
 
     const runSilentRefinement = async () => {
+      // Se o livro já tem todos os capítulos traduzidos salvos no IndexedDB para o modo Auto/PT, carregar direto!
+      if (
+        sourceLang === "auto" &&
+        work.translatedChaptersPt &&
+        work.translatedChaptersPt.length === work.chapters.length
+      ) {
+        const preloaded: Record<string, WorkChapter> = {};
+        work.translatedChaptersPt.forEach((ch) => {
+          preloaded[`${sourceLang}:${ch.id}`] = ch;
+        });
+        if (!cancelled) {
+          setSilentTranslatedMap((prev) => ({ ...preloaded, ...prev }));
+        }
+        return;
+      }
+
+      // 1. Traduzir imediatamente o capítulo atual que o usuário está lendo
       const currentOrig = work.chapters[currentChapterIndex];
       if (currentOrig) {
         const key = `${sourceLang}:${currentOrig.id}`;
         if (!silentTranslatedMap[key]) {
+          setIsTranslatingNow(true);
           const refined = await refineChapterTranslationSilently(
             currentOrig,
             sourceLang
           );
           if (!cancelled) {
             setSilentTranslatedMap((prev) => ({ ...prev, [key]: refined }));
+            setIsTranslatingNow(false);
           }
         }
       }
 
+      // 2. Traduzir título e sinopse do livro se ainda não traduzidos
+      if (!work.translatedTitlePt || !work.translatedSummaryPt) {
+        const [tTitle, tSum] = await translateStringsBatchNeural(
+          [work.title, work.summary],
+          sourceLang
+        );
+        if (!cancelled && tTitle) {
+          await db.works.update(work.id, {
+            translatedTitlePt: tTitle,
+            translatedSummaryPt: tSum || work.summary,
+          });
+        }
+      }
+
+      // 3. Traduzir silenciosamente os demais capítulos do livro e salvar no IndexedDB para funcionar offline!
+      const allTranslated: WorkChapter[] = [];
       for (const ch of work.chapters) {
-        if (cancelled) break;
+        if (cancelled) return;
         const key = `${sourceLang}:${ch.id}`;
-        if (!silentTranslatedMap[key]) {
+        if (silentTranslatedMap[key]) {
+          allTranslated.push(silentTranslatedMap[key]);
+        } else {
           const refined = await refineChapterTranslationSilently(
             ch,
             sourceLang
           );
+          allTranslated.push(refined);
           if (!cancelled) {
             setSilentTranslatedMap((prev) => ({ ...prev, [key]: refined }));
           }
         }
+      }
+
+      if (!cancelled && allTranslated.length === work.chapters.length) {
+        await db.works.update(work.id, {
+          translatedChaptersPt: allTranslated,
+        });
       }
     };
 
@@ -276,30 +321,39 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       return silentTranslatedMap[key];
     }
 
-    return {
-      ...baseChapter,
-      title: translatePlainStringOffline(baseChapter.title, sourceLang),
-      htmlContent: translateHtmlInstantInPlace(
-        baseChapter.htmlContent,
-        sourceLang
-      ),
-      plainText: translatePlainStringOffline(baseChapter.plainText, sourceLang),
-    };
-  }, [baseChapter, translateToPt, sourceLang, silentTranslatedMap]);
+    // Verificar se já está salvo no IndexedDB do livro
+    const savedFromDb = work?.translatedChaptersPt?.[currentChapterIndex];
+    if (savedFromDb) {
+      return savedFromDb;
+    }
+
+    return baseChapter;
+  }, [
+    baseChapter,
+    translateToPt,
+    sourceLang,
+    silentTranslatedMap,
+    work?.translatedChaptersPt,
+    currentChapterIndex,
+  ]);
 
   const displayedWorkTitle = useMemo(() => {
     if (!work) return "";
-    return translateToPt
-      ? translatePlainStringOffline(work.title, sourceLang)
-      : work.title;
+    if (!translateToPt) return work.title;
+    return (
+      work.translatedTitlePt ||
+      translatePlainStringOffline(work.title, sourceLang)
+    );
   }, [work, translateToPt, sourceLang]);
 
   const displayedSummary = useMemo(() => {
     if (!work?.summary) return "";
-    return translateToPt
-      ? translatePlainStringOffline(work.summary, sourceLang)
-      : work.summary;
-  }, [work?.summary, translateToPt, sourceLang]);
+    if (!translateToPt) return work.summary;
+    return (
+      work.translatedSummaryPt ||
+      translatePlainStringOffline(work.summary, sourceLang)
+    );
+  }, [work, translateToPt, sourceLang]);
 
   const chapterHighlights = useMemo(
     () => highlights.filter((h) => h.chapterIndex === currentChapterIndex),
@@ -1059,7 +1113,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                   color: translateToPt ? "#ffffff" : activeTheme.text,
                 }}
               >
-                Português
+                {isTranslatingNow ? "Traduzindo..." : "Português"}
               </button>
             </div>
 

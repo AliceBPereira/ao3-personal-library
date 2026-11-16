@@ -123,6 +123,9 @@ export interface WorkItem {
     highlightsCount: number;
   };
   chapters: WorkChapter[];
+  translatedChaptersPt?: WorkChapter[]; // Cache persistente offline da tradução neural completa
+  translatedTitlePt?: string;
+  translatedSummaryPt?: string;
   rawFileBlob?: Blob | ArrayBuffer;
   fileName?: string;
 }

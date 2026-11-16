@@ -11,7 +11,11 @@ import {
 } from "@/core/services/readingMetrics";
 import { useLibraryStore } from "@/store/useLibraryStore";
 import { READER_THEMES, useReaderStore } from "@/store/useReaderStore";
-import { translatePlainStringOffline } from "@/core/services/offlineTranslator";
+import {
+  translatePlainStringOffline,
+  translateStringsBatchNeural,
+} from "@/core/services/offlineTranslator";
+import { db } from "@/core/db/database";
 import {
   BookOpen,
   Download,
@@ -44,11 +48,40 @@ export function WorkBlurbCard({
   const { wpm, theme, translateToPt, sourceLang } = useReaderStore();
   const activeTheme = READER_THEMES[theme] || READER_THEMES.cream;
 
+  React.useEffect(() => {
+    if (!translateToPt) return;
+    if (work.translatedTitlePt && work.translatedSummaryPt) return;
+    let cancelled = false;
+    translateStringsBatchNeural([work.title, work.summary], sourceLang).then(
+      ([tTitle, tSum]) => {
+        if (!cancelled && tTitle) {
+          db.works.update(work.id, {
+            translatedTitlePt: tTitle,
+            translatedSummaryPt: tSum || work.summary,
+          });
+        }
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    translateToPt,
+    sourceLang,
+    work.id,
+    work.title,
+    work.summary,
+    work.translatedTitlePt,
+    work.translatedSummaryPt,
+  ]);
+
   const displayedTitle = translateToPt
-    ? translatePlainStringOffline(work.title, sourceLang)
+    ? work.translatedTitlePt ||
+      translatePlainStringOffline(work.title, sourceLang)
     : work.title;
   const displayedSummary = translateToPt
-    ? translatePlainStringOffline(work.summary, sourceLang)
+    ? work.translatedSummaryPt ||
+      translatePlainStringOffline(work.summary, sourceLang)
     : work.summary;
 
   const estimatedTime = formatReadingTime(work.wordCount, wpm);
