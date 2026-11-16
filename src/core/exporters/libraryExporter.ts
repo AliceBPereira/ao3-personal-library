@@ -1,6 +1,11 @@
 import JSZip from "jszip";
 import { db } from "@/core/db/database";
-import { WorkItem } from "@/types/work";
+import { WorkChapter, WorkItem } from "@/types/work";
+import {
+  refineChapterTranslationSilently,
+  SourceLangCode,
+  translateStringsBatchNeural,
+} from "@/core/services/offlineTranslator";
 
 function triggerBrowserDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -15,6 +20,82 @@ function triggerBrowserDownload(blob: Blob, filename: string) {
 
 function sanitizeFilename(name: string): string {
   return name.replace(/[<>:"/\\|?*]+/g, "_").trim() || "obra_ao3";
+}
+
+// Garante que o livro inteiro (título, sinopse, tags e TODOS os capítulos) esteja traduzido para Português antes de exportar,
+// e já salva no IndexedDB para ficar disponível offline!
+export async function ensureWorkFullyTranslatedForExport(
+  work: WorkItem,
+  sourceLang: SourceLangCode = "auto",
+  onProgress?: (msg: string) => void
+): Promise<WorkItem> {
+  // Se já tem todos os capítulos traduzidos salvos no banco, usa direto!
+  if (
+    work.translatedChaptersPt &&
+    work.translatedChaptersPt.length === work.chapters.length &&
+    work.translatedTitlePt &&
+    work.translatedSummaryPt
+  ) {
+    onProgress?.("Usando tradução completa salva no banco local...");
+    return {
+      ...work,
+      title: work.translatedTitlePt,
+      summary: work.translatedSummaryPt,
+      language: "Português (Traduzido)",
+      chapters: work.translatedChaptersPt,
+    };
+  }
+
+  onProgress?.("Traduzindo título, sinopse e tags...");
+  const [translatedTitle, translatedSummary] =
+    await translateStringsBatchNeural(
+      [work.title, work.summary || ""],
+      sourceLang
+    );
+
+  const translatedFreeforms =
+    work.tags.freeforms.length > 0
+      ? await translateStringsBatchNeural(work.tags.freeforms, sourceLang)
+      : [];
+
+  const translatedWarnings =
+    work.tags.warnings.length > 0
+      ? await translateStringsBatchNeural(work.tags.warnings, sourceLang)
+      : [];
+
+  const translatedChapters: WorkChapter[] = [];
+  for (let i = 0; i < work.chapters.length; i++) {
+    const ch = work.chapters[i];
+    onProgress?.(
+      `Traduzindo capítulo ${i + 1} de ${work.chapters.length} (${ch.title})...`
+    );
+    const refined = await refineChapterTranslationSilently(ch, sourceLang);
+    translatedChapters.push(refined);
+  }
+
+  // Salvar no IndexedDB do livro para que não precise traduzir novamente no futuro
+  await db.works.update(work.id, {
+    translatedTitlePt: translatedTitle || work.title,
+    translatedSummaryPt: translatedSummary || work.summary,
+    translatedChaptersPt: translatedChapters,
+  });
+
+  return {
+    ...work,
+    title: translatedTitle || work.title,
+    summary: translatedSummary || work.summary,
+    language: "Português (PT-BR)",
+    tags: {
+      ...work.tags,
+      warnings:
+        translatedWarnings.length > 0 ? translatedWarnings : work.tags.warnings,
+      freeforms:
+        translatedFreeforms.length > 0
+          ? translatedFreeforms
+          : work.tags.freeforms,
+    },
+    chapters: translatedChapters,
+  };
 }
 
 export function generateAo3HtmlDocument(
@@ -95,14 +176,51 @@ export function generateAo3HtmlDocument(
 </html>`;
 }
 
-export async function exportWorkAsHtmlAO3(work: WorkItem) {
-  const highlights = await db.highlights.where("workId").equals(work.id).toArray();
-  const html = generateAo3HtmlDocument(work, highlights);
+export async function exportWorkAsHtmlAO3(
+  work: WorkItem,
+  options?: {
+    exportTranslatedPt?: boolean;
+    sourceLang?: SourceLangCode;
+    onProgress?: (msg: string) => void;
+  }
+) {
+  const targetWork = options?.exportTranslatedPt
+    ? await ensureWorkFullyTranslatedForExport(
+        work,
+        options.sourceLang || "auto",
+        options.onProgress
+      )
+    : work;
+
+  const highlights = await db.highlights
+    .where("workId")
+    .equals(work.id)
+    .toArray();
+  const html = generateAo3HtmlDocument(targetWork, highlights);
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-  triggerBrowserDownload(blob, `${sanitizeFilename(work.title)} - ${work.author}.html`);
+  const suffix = options?.exportTranslatedPt ? " [PT-BR]" : "";
+  triggerBrowserDownload(
+    blob,
+    `${sanitizeFilename(targetWork.title)} - ${targetWork.author}${suffix}.html`
+  );
 }
 
-export async function exportWorkAsEpub(work: WorkItem) {
+export async function exportWorkAsEpub(
+  work: WorkItem,
+  options?: {
+    exportTranslatedPt?: boolean;
+    sourceLang?: SourceLangCode;
+    onProgress?: (msg: string) => void;
+  }
+) {
+  const targetWork = options?.exportTranslatedPt
+    ? await ensureWorkFullyTranslatedForExport(
+        work,
+        options.sourceLang || "auto",
+        options.onProgress
+      )
+    : work;
+
   const zip = new JSZip();
   zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
 
@@ -120,7 +238,7 @@ export async function exportWorkAsEpub(work: WorkItem) {
   const manifestItems: string[] = [];
   const spineItems: string[] = [];
 
-  work.chapters.forEach((ch, idx) => {
+  targetWork.chapters.forEach((ch, idx) => {
     const fileName = `chapter_${idx + 1}.xhtml`;
     manifestItems.push(
       `<item id="ch${idx + 1}" href="${fileName}" media-type="application/xhtml+xml"/>`
@@ -142,10 +260,10 @@ export async function exportWorkAsEpub(work: WorkItem) {
   });
 
   const allSubjects = [
-    ...work.fandoms,
-    ...work.tags.relationships,
-    ...work.tags.characters,
-    ...work.tags.freeforms,
+    ...targetWork.fandoms,
+    ...targetWork.tags.relationships,
+    ...targetWork.tags.characters,
+    ...targetWork.tags.freeforms,
   ]
     .map((s) => `<dc:subject>${s.replace(/[<>&]/g, "")}</dc:subject>`)
     .join("\n    ");
@@ -155,12 +273,12 @@ export async function exportWorkAsEpub(work: WorkItem) {
     `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>${work.title.replace(/[<>&]/g, "")}</dc:title>
-    <dc:creator>${work.author.replace(/[<>&]/g, "")}</dc:creator>
-    <dc:language>${work.language}</dc:language>
-    <dc:description>${work.summary.replace(/[<>&]/g, "")}</dc:description>
+    <dc:title>${targetWork.title.replace(/[<>&]/g, "")}</dc:title>
+    <dc:creator>${targetWork.author.replace(/[<>&]/g, "")}</dc:creator>
+    <dc:language>${options?.exportTranslatedPt ? "pt-BR" : targetWork.language}</dc:language>
+    <dc:description>${targetWork.summary.replace(/[<>&]/g, "")}</dc:description>
     ${allSubjects}
-    <dc:identifier id="BookId">urn:uuid:${work.id}</dc:identifier>
+    <dc:identifier id="BookId">urn:uuid:${targetWork.id}</dc:identifier>
   </metadata>
   <manifest>
     ${manifestItems.join("\n    ")}
@@ -171,19 +289,51 @@ export async function exportWorkAsEpub(work: WorkItem) {
 </package>`
   );
 
-  const blob = await zip.generateAsync({ type: "blob", mimeType: "application/epub+zip" });
-  triggerBrowserDownload(blob, `${sanitizeFilename(work.title)}.epub`);
+  const blob = await zip.generateAsync({
+    type: "blob",
+    mimeType: "application/epub+zip",
+  });
+  const suffix = options?.exportTranslatedPt ? " [PT-BR]" : "";
+  triggerBrowserDownload(
+    blob,
+    `${sanitizeFilename(targetWork.title)}${suffix}.epub`
+  );
 }
 
-export async function exportWorkBundleZip(work: WorkItem) {
+export async function exportWorkBundleZip(
+  work: WorkItem,
+  options?: {
+    exportTranslatedPt?: boolean;
+    sourceLang?: SourceLangCode;
+    onProgress?: (msg: string) => void;
+  }
+) {
+  const targetWork = options?.exportTranslatedPt
+    ? await ensureWorkFullyTranslatedForExport(
+        work,
+        options.sourceLang || "auto",
+        options.onProgress
+      )
+    : work;
+
   const zip = new JSZip();
-  const highlights = await db.highlights.where("workId").equals(work.id).toArray();
-  const bookmarks = await db.bookmarks.where("workId").equals(work.id).toArray();
-  const pinnedPages = await db.pinnedPages.where("workId").equals(work.id).toArray();
+  const highlights = await db.highlights
+    .where("workId")
+    .equals(work.id)
+    .toArray();
+  const bookmarks = await db.bookmarks
+    .where("workId")
+    .equals(work.id)
+    .toArray();
+  const pinnedPages = await db.pinnedPages
+    .where("workId")
+    .equals(work.id)
+    .toArray();
 
   const metadataJson = {
     exportedAt: new Date().toISOString(),
-    work: { ...work, rawFileBlob: undefined },
+    isTranslatedToPortuguese: !!options?.exportTranslatedPt,
+    work: { ...targetWork, rawFileBlob: undefined },
     highlights,
     bookmarks,
     pinnedPages,
@@ -191,8 +341,10 @@ export async function exportWorkBundleZip(work: WorkItem) {
 
   zip.file("metadata-tags-anotacoes.json", JSON.stringify(metadataJson, null, 2));
   zip.file(
-    `${sanitizeFilename(work.title)}.html`,
-    generateAo3HtmlDocument(work, highlights)
+    `${sanitizeFilename(targetWork.title)}${
+      options?.exportTranslatedPt ? "_PT-BR" : ""
+    }.html`,
+    generateAo3HtmlDocument(targetWork, highlights)
   );
 
   if (work.rawFileBlob && work.fileName) {
@@ -200,7 +352,11 @@ export async function exportWorkBundleZip(work: WorkItem) {
   }
 
   const blob = await zip.generateAsync({ type: "blob" });
-  triggerBrowserDownload(blob, `${sanitizeFilename(work.title)}_pacote_ao3.zip`);
+  const suffix = options?.exportTranslatedPt ? "_traduzido_PT-BR" : "";
+  triggerBrowserDownload(
+    blob,
+    `${sanitizeFilename(targetWork.title)}${suffix}_pacote_ao3.zip`
+  );
 }
 
 export async function exportEntireLibraryBackup() {

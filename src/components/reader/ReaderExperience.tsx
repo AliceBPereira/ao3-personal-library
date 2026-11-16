@@ -20,6 +20,7 @@ import {
   translateStringsBatchNeural,
 } from "@/core/services/offlineTranslator";
 import { StatusIconsGrid } from "@/components/ao3/StatusIconsGrid";
+import { ExportWorkModal } from "@/components/library/ExportWorkModal";
 import {
   ArrowLeft,
   Bookmark,
@@ -31,6 +32,7 @@ import {
   Columns,
   Compass,
   Copy,
+  Download,
   Highlighter,
   Languages,
   MapPin,
@@ -169,6 +171,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const [showAppearanceMenu, setShowAppearanceMenu] = useState(false);
   const [showHighlightsDrawer, setShowHighlightsDrawer] = useState(false);
   const [showPinnedModal, setShowPinnedModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
 
   // Cache invisível de capítulos traduzidos (substitui o texto in-place igual ao Google Translate e persiste no IndexedDB)
   const [silentTranslatedMap, setSilentTranslatedMap] = useState<
@@ -1197,6 +1200,22 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             >
               <Palette className="w-3.5 h-3.5" />
               <span>Temas</span>
+            </button>
+
+            {/* Botão Exportar (Original ou Traduzido Completo) */}
+            <button
+              type="button"
+              onClick={() => setShowExportModal(true)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-sm border font-medium transition-colors"
+              style={{
+                borderColor: activeTheme.border,
+                backgroundColor: activeTheme.bg,
+                color: activeTheme.text,
+              }}
+              title="Exportar livro completo (em Português traduzido ou no idioma original)"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Exportar</span>
             </button>
           </div>
         </div>
@@ -2275,6 +2294,12 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
           </div>
         </div>
       )}
+
+      {/* Modal de Exportação (Suporta exportar o livro completo traduzido em PT-BR ou no idioma original) */}
+      <ExportWorkModal
+        work={showExportModal ? work : null}
+        onClose={() => setShowExportModal(false)}
+      />
     </div>
   );
 }
