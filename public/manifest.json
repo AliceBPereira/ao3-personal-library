@@ -1,0 +1,9 @@
+{
+  "name": "Arquivo de Nossa Autoria — Biblioteca Pessoal AO3",
+  "short_name": "Biblioteca AO3",
+  "description": "Leitor e organizador pessoal de livros e fanfics (EPUB, PDF, MOBI, HTML) 100% Offline com tradução local.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAF6E8",
+  "theme_color": "#990000"
+}
