@@ -38,3 +38,5 @@ Thumbs.db
 
 # Local sample ebooks / caches (optional)
 *.tmp
+.vercel
+.env*

@@ -582,7 +582,7 @@ export async function exportWorkAsMobi(
   )}</title></head><body>${chaptersMobiHtml}</body></html>`;
 
   const mobiBytes = buildPalmDocMobiBinary(targetWork.title, fullMobiHtml);
-  const blob = new Blob([mobiBytes], {
+  const blob = new Blob([mobiBytes as unknown as BlobPart], {
     type: "application/x-mobipocket-ebook",
   });
   const suffix = options?.exportTranslatedPt ? " (PT-BR)" : "";
