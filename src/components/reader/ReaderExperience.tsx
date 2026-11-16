@@ -37,6 +37,7 @@ import {
   Palette,
   Plus,
   RotateCcw,
+  Scissors,
   ScrollText,
   Sparkles,
   Trash2,
@@ -67,6 +68,72 @@ const HIGHLIGHT_COLORS: Array<{
   { id: "amber", label: "Âmbar", bg: "#fde68a", border: "#d97706" },
 ];
 
+// Componente Memorizado Isolado para o Texto do Livro:
+// Impede que o React recrie o DOM do dangerouslySetInnerHTML quando a barra de seleção abre,
+// evitando o bug do navegador de puxar a seleção até o topo da página!
+const MemoizedBookSurface = React.memo(function MemoizedBookSurface({
+  html,
+  fontClass,
+  fontSize,
+  lineHeight,
+  maxWidth,
+  onTextSelected,
+}: {
+  html: string;
+  fontClass: string;
+  fontSize: number;
+  lineHeight: number;
+  maxWidth?: number;
+  onTextSelected: (selected: string, surroundingContext: string) => void;
+}) {
+  const articleRef = useRef<HTMLElement | null>(null);
+
+  const handlePointerUp = () => {
+    setTimeout(() => {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+
+      const range = sel.getRangeAt(0);
+      const container = articleRef.current;
+      if (!container) return;
+
+      // Garantir que a seleção começou e terminou dentro do artigo literário
+      if (
+        !container.contains(range.startContainer) &&
+        !container.contains(range.endContainer)
+      ) {
+        return;
+      }
+
+      const rawSelected = sel.toString().replace(/\s+/g, " ").trim();
+      if (rawSelected.length >= 2) {
+        const fullPlainText = (container.textContent || "")
+          .replace(/\s+/g, " ")
+          .trim();
+        onTextSelected(rawSelected, fullPlainText);
+      }
+    }, 20);
+  };
+
+  return (
+    <article
+      ref={articleRef}
+      onMouseUp={handlePointerUp}
+      onKeyUp={handlePointerUp}
+      className={`${fontClass} reader-prose select-text space-y-4`}
+      style={{
+        fontSize: `${fontSize}px`,
+        lineHeight: lineHeight,
+        maxWidth: maxWidth ? `${maxWidth}px` : undefined,
+        margin: maxWidth ? "0 auto" : undefined,
+      }}
+      dangerouslySetInnerHTML={{
+        __html: html,
+      }}
+    />
+  );
+});
+
 export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const {
     theme,
@@ -92,9 +159,11 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
   const [scrollPercent, setScrollPercent] = useState(0);
 
-  // Estado da Paginação Isolada Baseada na Altura Real da Tela (Sem Scroll e Sem Vazamento de Seleção!)
+  // Estado da Paginação Isolada Baseada na Altura Real da Tela
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [measuredPagesHtml, setMeasuredPagesHtml] = useState<string[]>([""]);
+  const [viewportHeight, setViewportHeight] = useState<number>(560);
+  const [viewportWidth, setViewportWidth] = useState<number>(720);
 
   // Painéis laterais e modais do leitor
   const [showAppearanceMenu, setShowAppearanceMenu] = useState(false);
@@ -106,8 +175,9 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     Record<string, WorkChapter>
   >({});
 
-  // Estado de seleção de texto estilo Kindle + Copiar
+  // Estado de seleção de texto + Ajustador de Palavras Antes de Salvar/Copiar
   const [selectedQuote, setSelectedQuote] = useState<string>("");
+  const [pageContextText, setPageContextText] = useState<string>("");
   const [copiedFeedback, setCopiedFeedback] = useState(false);
   const [highlightNote, setHighlightNote] = useState<string>("");
   const [highlightColor, setHighlightColor] =
@@ -267,25 +337,36 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     [currentChapter?.htmlContent, decorateHtmlWithHighlights]
   );
 
-  // Motor de Paginação Real por Altura da Tela:
-  // Divide os parágrafos/sentenças em páginas isoladas que cabem 100% na altura disponível da janela (sem scroll!)
-  // Como apenas a página atual é renderizada no DOM visível, a seleção de mouse e cópia (Ctrl+C) ficam 100% exatas!
-  const buildDiscreteScreenPages = useCallback(() => {
+  // Observar dimensões da janela apenas quando elas mudarem de verdade (> 5px),
+  // para nunca interromper uma seleção de texto ativa com o mouse!
+  useEffect(() => {
     if (navigationMode !== "paginated") return;
-    const vp = kindleViewportRef.current;
+    const updateDims = () => {
+      const vp = kindleViewportRef.current;
+      if (!vp) return;
+      const h = Math.max(220, vp.clientHeight - 16);
+      const w = Math.max(260, vp.clientWidth);
+      setViewportHeight((prev) => (Math.abs(prev - h) > 6 ? h : prev));
+      setViewportWidth((prev) => (Math.abs(prev - w) > 6 ? w : prev));
+    };
+
+    updateDims();
+    window.addEventListener("resize", updateDims);
+    return () => window.removeEventListener("resize", updateDims);
+  }, [navigationMode, maxWidth, viewingPinnedPage, returnAnchor]);
+
+  // Construir as páginas discretas somente quando o texto, fonte ou tamanho da janela mudarem
+  useEffect(() => {
+    if (navigationMode !== "paginated") return;
     const measurer = hiddenMeasurerRef.current;
-    if (!vp || !measurer) return;
+    if (!measurer) return;
 
-    const availableHeight = Math.max(220, vp.clientHeight - 16);
-    const availableWidth = Math.max(260, vp.clientWidth);
-
-    measurer.style.width = `${availableWidth}px`;
+    measurer.style.width = `${viewportWidth}px`;
     measurer.innerHTML = "";
 
     const tempContainer = document.createElement("div");
     tempContainer.innerHTML = decoratedChapterHtml || "<p></p>";
 
-    // Extrair unidades atômicas (parágrafos/blocos)
     const rawNodes = Array.from(tempContainer.childNodes);
     const blocksHtml: string[] = [];
 
@@ -321,10 +402,9 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       const candidate = [...currentBucket, block].join("\n");
       measurer.innerHTML = candidate;
 
-      if (measurer.scrollHeight <= availableHeight) {
+      if (measurer.scrollHeight <= viewportHeight) {
         currentBucket.push(block);
       } else {
-        // Se o próprio parágrafo sozinho for maior que a tela inteira (ex: fonte muito grande), dividir por frases
         if (currentBucket.length === 0) {
           const singleDiv = document.createElement("div");
           singleDiv.innerHTML = block;
@@ -336,7 +416,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             const testParagraph = `<p>${sentenceChunk}${sent}</p>`;
             measurer.innerHTML = testParagraph;
             if (
-              measurer.scrollHeight > availableHeight &&
+              measurer.scrollHeight > viewportHeight &&
               sentenceChunk.trim().length > 0
             ) {
               pages.push(`<p>${sentenceChunk.trim()}</p>`);
@@ -349,7 +429,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             currentBucket = [`<p>${sentenceChunk.trim()}</p>`];
           }
         } else {
-          // Fechar a página atual e iniciar uma nova com este bloco
           flushBucket();
           currentBucket = [block];
         }
@@ -364,41 +443,14 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     setCurrentPageIndex((prev) =>
       Math.min(prev, Math.max(0, finalPages.length - 1))
     );
-  }, [navigationMode, decoratedChapterHtml]);
-
-  useEffect(() => {
-    if (navigationMode !== "paginated") return;
-    const timer = setTimeout(() => {
-      buildDiscreteScreenPages();
-    }, 25);
-
-    const vp = kindleViewportRef.current;
-    let observer: ResizeObserver | null = null;
-    if (vp && typeof ResizeObserver !== "undefined") {
-      observer = new ResizeObserver(() => {
-        buildDiscreteScreenPages();
-      });
-      observer.observe(vp);
-    }
-
-    window.addEventListener("resize", buildDiscreteScreenPages);
-    return () => {
-      clearTimeout(timer);
-      if (observer) observer.disconnect();
-      window.removeEventListener("resize", buildDiscreteScreenPages);
-    };
   }, [
     navigationMode,
+    decoratedChapterHtml,
     fontSize,
     lineHeight,
-    maxWidth,
     fontFamily,
-    currentChapterIndex,
-    decoratedChapterHtml,
-    translateToPt,
-    viewingPinnedPage,
-    returnAnchor,
-    buildDiscreteScreenPages,
+    viewportHeight,
+    viewportWidth,
   ]);
 
   const totalPagesInChapter = measuredPagesHtml.length || 1;
@@ -452,7 +504,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
           lastReadAt: new Date().toISOString(),
         },
       });
-    }, 500);
+    }, 600);
     return () => clearTimeout(timer);
   }, [
     work,
@@ -512,7 +564,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       ) {
         return;
       }
-      // Não interceptar Ctrl+C / Cmd+C!
       if (e.ctrlKey || e.metaKey) return;
 
       if (e.key === "ArrowRight" || e.key === "PageDown") {
@@ -527,16 +578,56 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [navigationMode, handleNextPage, handlePrevPage]);
 
-  const handleMouseUpSelection = () => {
-    if (typeof window === "undefined") return;
-    setTimeout(() => {
-      const sel = window.getSelection();
-      const text = sel?.toString().trim() || "";
-      if (text.length >= 2) {
-        setSelectedQuote(text);
-        setCopiedFeedback(false);
+  const handleTextSelectedFromArticle = useCallback(
+    (selected: string, surroundingContext: string) => {
+      setSelectedQuote(selected);
+      setPageContextText(surroundingContext);
+      setCopiedFeedback(false);
+    },
+    []
+  );
+
+  // Funções para ajustar palavra por palavra o início ou o fim do trecho selecionado antes de salvar/copiar!
+  const adjustSelectionBoundaries = (
+    action: "trim_start" | "trim_end" | "expand_start" | "expand_end"
+  ) => {
+    const current = selectedQuote.trim();
+    if (!current) return;
+    const words = current.split(/\s+/);
+
+    if (action === "trim_start") {
+      if (words.length > 1) {
+        setSelectedQuote(words.slice(1).join(" "));
       }
-    }, 15);
+      return;
+    }
+
+    if (action === "trim_end") {
+      if (words.length > 1) {
+        setSelectedQuote(words.slice(0, -1).join(" "));
+      }
+      return;
+    }
+
+    if (!pageContextText) return;
+    const idx = pageContextText.indexOf(current);
+    if (idx === -1) return;
+
+    if (action === "expand_start" && idx > 0) {
+      const before = pageContextText.slice(0, idx).trimEnd();
+      const prevWords = before.split(/\s+/);
+      const lastWord = prevWords[prevWords.length - 1];
+      if (lastWord) {
+        setSelectedQuote(`${lastWord} ${current}`);
+      }
+    } else if (action === "expand_end") {
+      const after = pageContextText.slice(idx + current.length).trimStart();
+      const nextWords = after.split(/\s+/);
+      const firstWord = nextWords[0];
+      if (firstWord) {
+        setSelectedQuote(`${current} ${firstWord}`);
+      }
+    }
   };
 
   const handleCopyText = async (textToCopy: string) => {
@@ -772,19 +863,19 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
   return (
     <div
-      className={`transition-colors duration-300 flex flex-col ${
-        isPaginated ? "h-screen overflow-hidden select-text" : "min-h-screen"
+      className={`transition-colors duration-300 flex flex-col select-none ${
+        isPaginated ? "h-screen overflow-hidden" : "min-h-screen"
       }`}
       style={{
         backgroundColor: activeTheme.bg,
         color: activeTheme.text,
       }}
     >
-      {/* Medidor Invisível para Calcular as Páginas Exatas da Altura da Tela sem Usar CSS Multi-Column */}
+      {/* Medidor Invisível para Calcular as Páginas Exatas da Altura da Tela */}
       <div
         ref={hiddenMeasurerRef}
         aria-hidden="true"
-        className={`${fontClass} reader-prose fixed -left-[9999px] top-0 invisible pointer-events-none`}
+        className={`${fontClass} fixed -left-[9999px] top-0 invisible pointer-events-none select-none`}
         style={{
           fontSize: `${fontSize}px`,
           lineHeight: lineHeight,
@@ -794,7 +885,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
       {/* ================= BARRA SUPERIOR DO LEITOR (FIXA E SEMPRE ACESSÍVEL) ================= */}
       <header
-        className="sticky top-0 left-0 right-0 shrink-0 z-40 border-b px-3 sm:px-6 py-2 transition-all shadow-sm"
+        className="sticky top-0 left-0 right-0 shrink-0 z-40 border-b px-3 sm:px-6 py-2 transition-all shadow-sm select-none"
         style={{
           backgroundColor: activeTheme.surface,
           borderColor: activeTheme.border,
@@ -1021,7 +1112,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               <span>({highlights.length + bookmarks.length})</span>
             </button>
 
-            {/* Botão Temas de Papel e Tipografia (Onde fica o tamanho das letras) */}
+            {/* Botão Temas de Papel e Tipografia */}
             <button
               type="button"
               onClick={() => setShowAppearanceMenu((v) => !v)}
@@ -1198,7 +1289,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
       {/* ================= BANNER DE RETORNO INSTANTÂNEO (PÁGINA ESPECIAL) ================= */}
       {returnAnchor && (
-        <div className="shrink-0 z-20 bg-[#990000] text-white px-4 py-1.5 shadow-md flex flex-wrap items-center justify-between gap-2 text-[12px]">
+        <div className="shrink-0 z-20 bg-[#990000] text-white px-4 py-1.5 shadow-md flex flex-wrap items-center justify-between gap-2 text-[12px] select-none">
           <div className="flex items-center gap-2">
             <Compass className="w-4 h-4 animate-pulse shrink-0" />
             <span>
@@ -1218,13 +1309,13 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
         </div>
       )}
 
-      {/* ================= BARRA FLUTUANTE DE SELEÇÃO (COPIAR & DESTACAR ESTILO KINDLE) ================= */}
+      {/* ================= BARRA FLUTUANTE DE SELEÇÃO (COM AJUSTE DE INÍCIO/FIM PALAVRA POR PALAVRA + COPIAR) ================= */}
       {selectedQuote && (
-        <div className="fixed bottom-14 left-1/2 -translate-x-1/2 z-50 w-[94%] max-w-xl bg-white text-[#222] border-2 border-[#990000] rounded-sm shadow-2xl p-3.5 font-ao3Sans text-[12.5px]">
+        <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-50 w-[95%] max-w-2xl bg-white text-[#222] border-2 border-[#990000] rounded-sm shadow-2xl p-3.5 font-ao3Sans text-[12.5px] select-none">
           <div className="flex items-center justify-between mb-2">
             <span className="font-bold text-[#990000] flex items-center gap-1.5">
               <Sparkles className="w-4 h-4" />
-              Trecho Selecionado (Você pode copiar ou salvar como destaque)
+              Ajustar Trecho Selecionado (Defina exatamente onde começa e termina)
             </span>
             <button
               type="button"
@@ -1238,11 +1329,59 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             </button>
           </div>
 
+          {/* Botões Rápidos de Ajuste de Limites (Início e Fim da Seleção) */}
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2 bg-[#f5f5f5] p-1.5 rounded-sm border border-[#ddd] text-[11.5px]">
+            <div className="flex items-center gap-1">
+              <span className="font-semibold text-[#444] mr-1 flex items-center gap-1">
+                <Scissors className="w-3 h-3 text-[#990000]" />
+                Início:
+              </span>
+              <button
+                type="button"
+                onClick={() => adjustSelectionBoundaries("expand_start")}
+                className="px-2 py-0.5 bg-white border border-[#ccc] hover:border-[#990000] rounded-sm"
+                title="Incluir uma palavra antes do início"
+              >
+                + 1 palavra antes
+              </button>
+              <button
+                type="button"
+                onClick={() => adjustSelectionBoundaries("trim_start")}
+                className="px-2 py-0.5 bg-white border border-[#ccc] hover:border-[#990000] rounded-sm"
+                title="Remover a primeira palavra do trecho"
+              >
+                - Cortar 1ª palavra
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1">
+              <span className="font-semibold text-[#444] mr-1">Fim:</span>
+              <button
+                type="button"
+                onClick={() => adjustSelectionBoundaries("trim_end")}
+                className="px-2 py-0.5 bg-white border border-[#ccc] hover:border-[#990000] rounded-sm"
+                title="Remover a última palavra do trecho"
+              >
+                - Cortar última
+              </button>
+              <button
+                type="button"
+                onClick={() => adjustSelectionBoundaries("expand_end")}
+                className="px-2 py-0.5 bg-white border border-[#ccc] hover:border-[#990000] rounded-sm"
+                title="Incluir a próxima palavra depois do fim"
+              >
+                + 1 palavra depois
+              </button>
+            </div>
+          </div>
+
+          {/* Caixa de texto editável manualmente */}
           <textarea
-            rows={2}
+            rows={3}
             value={selectedQuote}
             onChange={(e) => setSelectedQuote(e.target.value)}
-            className="w-full text-[12.5px] text-[#222] bg-[#f9f9f9] p-2 border border-[#ccc] border-l-4 border-l-[#990000] rounded-sm mb-2.5 focus:outline-none"
+            className="w-full text-[13px] text-[#111] bg-[#fffdf7] p-2.5 border border-[#bbb] border-l-4 border-l-[#990000] rounded-sm mb-2.5 focus:outline-none select-text"
+            placeholder="Você também pode editar ou apagar qualquer palavra diretamente aqui..."
           />
 
           <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
@@ -1271,7 +1410,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               value={highlightNote}
               onChange={(e) => setHighlightNote(e.target.value)}
               placeholder="Adicionar nota ao destaque (opcional)..."
-              className="flex-1 min-w-[180px] border border-[#ccc] px-2 py-1 text-[12px] rounded-sm"
+              className="flex-1 min-w-[180px] border border-[#ccc] px-2 py-1 text-[12px] rounded-sm select-text"
             />
           </div>
 
@@ -1303,12 +1442,12 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 }}
                 className="px-2.5 py-1.5 border border-[#ccc] text-[12px] rounded-sm hover:bg-[#f3f3f3]"
               >
-                Fechar
+                Cancelar
               </button>
               <button
                 type="button"
                 onClick={handleSaveHighlight}
-                className="px-3.5 py-1.5 bg-[#990000] hover:bg-[#700000] text-white font-medium text-[12px] rounded-sm"
+                className="px-4 py-1.5 bg-[#990000] hover:bg-[#700000] text-white font-medium text-[12px] rounded-sm"
               >
                 Salvar Destaque
               </button>
@@ -1319,10 +1458,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
       {/* ================= ÁREA DE LEITURA: PAGINAÇÃO ISOLADA (SEM SCROLL) vs ROLAGEM ================= */}
       {isPaginated ? (
-        <main
-          onMouseUp={handleMouseUpSelection}
-          className="flex-1 relative flex flex-col items-center justify-center overflow-hidden px-12 sm:px-20 py-3"
-        >
+        <main className="flex-1 relative flex flex-col items-center justify-center overflow-hidden px-12 sm:px-20 py-3">
           {/* Margem Lateral Esquerda Clicável para Voltar Página (Isolada do Texto!) */}
           <div
             onClick={handlePrevPage}
@@ -1343,9 +1479,9 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             </button>
           </div>
 
-          {/* Cabeçalho Discreto da Página Atual */}
+          {/* Cabeçalho Discreto da Página Atual (select-none para nunca puxar seleção para o topo!) */}
           <div
-            className="w-full shrink-0 mb-2 pb-1.5 border-b flex items-center justify-between text-[11px] font-ao3Sans select-none"
+            className="w-full shrink-0 mb-2 pb-1.5 border-b flex items-center justify-between text-[11px] font-ao3Sans select-none pointer-events-none"
             style={{
               maxWidth: `${maxWidth}px`,
               borderColor: activeTheme.border,
@@ -1366,7 +1502,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
           {/* Caso esteja consultando uma Página Especial Fixada */}
           {viewingPinnedPage && (
             <div
-              className="w-full shrink-0 mb-2 p-2.5 rounded-sm border text-[12.5px]"
+              className="w-full shrink-0 mb-2 p-2.5 rounded-sm border text-[12.5px] select-none"
               style={{
                 maxWidth: `${maxWidth}px`,
                 borderColor: activeTheme.accent,
@@ -1395,21 +1531,18 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             </div>
           )}
 
-          {/* Container Central da Página Única: Só existe o texto desta página no DOM (Seleção e Cópia 100% precisas!) */}
+          {/* Container Central Memorizado: Não sofre re-render quando a seleção muda! */}
           <div
             ref={kindleViewportRef}
-            className="w-full flex-1 overflow-hidden relative cursor-text select-text"
+            className="w-full flex-1 overflow-hidden relative"
             style={{ maxWidth: `${maxWidth}px` }}
           >
-            <article
-              className={`${fontClass} reader-prose select-text`}
-              style={{
-                fontSize: `${fontSize}px`,
-                lineHeight: lineHeight,
-              }}
-              dangerouslySetInnerHTML={{
-                __html: currentDiscretePageHtml,
-              }}
+            <MemoizedBookSurface
+              html={currentDiscretePageHtml}
+              fontClass={fontClass}
+              fontSize={fontSize}
+              lineHeight={lineHeight}
+              onTextSelected={handleTextSelectedFromArticle}
             />
           </div>
 
@@ -1441,11 +1574,10 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
         <main
           className="flex-1 w-full mx-auto px-4 sm:px-8 py-6 sm:py-10"
           style={{ maxWidth: `${maxWidth + 80}px` }}
-          onMouseUp={handleMouseUpSelection}
         >
           {currentChapterIndex === 0 && (
             <section
-              className="mb-8 p-4 rounded-sm border text-[12.5px] font-ao3Sans"
+              className="mb-8 p-4 rounded-sm border text-[12.5px] font-ao3Sans select-none"
               style={{
                 backgroundColor: activeTheme.surface,
                 borderColor: activeTheme.border,
@@ -1524,7 +1656,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
           {viewingPinnedPage && (
             <div
-              className="mb-6 p-4 rounded-sm border-2"
+              className="mb-6 p-4 rounded-sm border-2 select-none"
               style={{
                 borderColor: activeTheme.accent,
                 backgroundColor: activeTheme.surface,
@@ -1576,7 +1708,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
           )}
 
           <div
-            className="mb-6 pb-3 border-b flex flex-wrap items-center justify-between gap-2"
+            className="mb-6 pb-3 border-b flex flex-wrap items-center justify-between gap-2 select-none"
             style={{ borderColor: activeTheme.border }}
           >
             <h3 className="text-[18px] font-serif font-bold">
@@ -1590,21 +1722,17 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             </span>
           </div>
 
-          <article
-            className={`${fontClass} reader-prose select-text space-y-4`}
-            style={{
-              fontSize: `${fontSize}px`,
-              lineHeight: lineHeight,
-              maxWidth: `${maxWidth}px`,
-              margin: "0 auto",
-            }}
-            dangerouslySetInnerHTML={{
-              __html: decoratedChapterHtml,
-            }}
+          <MemoizedBookSurface
+            html={decoratedChapterHtml}
+            fontClass={fontClass}
+            fontSize={fontSize}
+            lineHeight={lineHeight}
+            maxWidth={maxWidth}
+            onTextSelected={handleTextSelectedFromArticle}
           />
 
           <div
-            className="mt-12 pt-5 border-t flex items-center justify-between gap-4 font-ao3Sans text-[13px]"
+            className="mt-12 pt-5 border-t flex items-center justify-between gap-4 font-ao3Sans text-[13px] select-none"
             style={{ borderColor: activeTheme.border }}
           >
             <button
@@ -1667,7 +1795,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
       {/* ================= RODAPÉ DE PÁGINA E MÉTRICAS EM TEMPO REAL ================= */}
       <footer
-        className="sticky bottom-0 left-0 right-0 shrink-0 z-30 border-t px-4 py-1.5 font-ao3Sans text-[11.5px]"
+        className="sticky bottom-0 left-0 right-0 shrink-0 z-30 border-t px-4 py-1.5 font-ao3Sans text-[11.5px] select-none"
         style={{
           backgroundColor: activeTheme.surface,
           borderColor: activeTheme.border,
@@ -1787,7 +1915,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                                 hl.pageNumber
                               )
                             }
-                            className="p-2 rounded-sm text-[#111] cursor-pointer text-[12.5px] leading-snug"
+                            className="p-2 rounded-sm text-[#111] cursor-pointer text-[12.5px] leading-snug select-text"
                             style={{
                               backgroundColor: cDef.bg,
                               borderLeft: `3px solid ${cDef.border}`,

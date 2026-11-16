@@ -17,28 +17,42 @@
     color: var(--app-text);
     font-family: "Lucida Grande", "Lucida Sans Unicode", Verdana, Helvetica, sans-serif;
     transition: background-color 0.2s ease, color 0.2s ease;
+    /* Por padrão, evitar que barras e layouts sejam selecionados acidentalmente até o topo */
+    user-select: none;
+    -webkit-user-select: none;
   }
 }
 
-.reader-prose {
+/* Liberar seleção de texto nativa APENAS dentro do conteúdo literário e campos de formulário */
+.reader-prose,
+.reader-prose p,
+.reader-prose span,
+.reader-prose em,
+.reader-prose strong,
+.reader-prose i,
+.reader-prose b,
+.reader-prose blockquote,
+.reader-prose li,
+.reader-prose h1,
+.reader-prose h2,
+.reader-prose h3,
+.reader-prose h4,
+.reader-prose mark,
+input,
+textarea {
   user-select: text !important;
   -webkit-user-select: text !important;
   cursor: text;
 }
 
-.reader-prose * {
-  user-select: text !important;
-  -webkit-user-select: text !important;
-}
-
 .reader-prose ::selection {
-  background-color: rgba(153, 0, 0, 0.22);
+  background-color: rgba(153, 0, 0, 0.24);
   color: inherit;
 }
 
 .reader-prose p {
-  margin-bottom: 1.1em;
-  text-align: justify;
+  margin-bottom: 1.05em;
+  text-align: left;
 }
 
 .reader-prose h1,
@@ -58,6 +72,7 @@
   opacity: 0.25;
   margin: 1.5em auto;
   width: 45%;
+  user-select: none !important;
 }
 
 .reader-prose blockquote {
@@ -75,20 +90,4 @@
 
 .reader-prose li {
   margin-bottom: 0.35rem;
-}
-
-.kindle-columns-flow {
-  column-fill: auto;
-}
-
-.kindle-columns-flow p,
-.kindle-columns-flow blockquote,
-.kindle-columns-flow li {
-  orphans: 2;
-  widows: 2;
-}
-
-.kindle-columns-flow img,
-.kindle-columns-flow blockquote {
-  break-inside: avoid;
 }
