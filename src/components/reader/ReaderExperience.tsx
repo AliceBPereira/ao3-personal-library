@@ -199,6 +199,8 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const kindleViewportRef = useRef<HTMLDivElement | null>(null);
   const hiddenMeasurerRef = useRef<HTMLDivElement | null>(null);
   const hasRestoredProgress = useRef(false);
+  const translatedKeysSetRef = useRef<Set<string>>(new Set());
+  const isPersistingAllChaptersRef = useRef<boolean>(false);
 
   useEffect(() => {
     ensureDatabaseSeeded();
@@ -227,13 +229,13 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const baseChapter =
     rawChapters[currentChapterIndex] || rawChapters[0] || null;
 
-  // Tradução Neural Completa em Background (salva automaticamente no IndexedDB do livro para leitura offline!)
+  // Tradução Neural Completa sem loop de dependências (salva automaticamente no IndexedDB para leitura offline!)
   useEffect(() => {
     if (!translateToPt || !work) return;
     let cancelled = false;
 
     const runSilentRefinement = async () => {
-      // Se o livro já tem todos os capítulos traduzidos salvos no IndexedDB para o modo Auto/PT, carregar direto!
+      // 1. Se o livro já tem todos os capítulos traduzidos salvos no IndexedDB, usar direto!
       if (
         sourceLang === "auto" &&
         work.translatedChaptersPt &&
@@ -241,7 +243,9 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       ) {
         const preloaded: Record<string, WorkChapter> = {};
         work.translatedChaptersPt.forEach((ch) => {
-          preloaded[`${sourceLang}:${ch.id}`] = ch;
+          const k = `${sourceLang}:${ch.id}`;
+          preloaded[k] = ch;
+          translatedKeysSetRef.current.add(k);
         });
         if (!cancelled) {
           setSilentTranslatedMap((prev) => ({ ...preloaded, ...prev }));
@@ -249,60 +253,72 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
         return;
       }
 
-      // 1. Traduzir imediatamente o capítulo atual que o usuário está lendo
+      // 2. Traduzir imediatamente o capítulo atual que o usuário está lendo (se ainda não traduzido)
       const currentOrig = work.chapters[currentChapterIndex];
       if (currentOrig) {
-        const key = `${sourceLang}:${currentOrig.id}`;
-        if (!silentTranslatedMap[key]) {
+        const currentKey = `${sourceLang}:${currentOrig.id}`;
+        if (!translatedKeysSetRef.current.has(currentKey)) {
+          translatedKeysSetRef.current.add(currentKey);
           setIsTranslatingNow(true);
-          const refined = await refineChapterTranslationSilently(
-            currentOrig,
-            sourceLang
-          );
-          if (!cancelled) {
-            setSilentTranslatedMap((prev) => ({ ...prev, [key]: refined }));
-            setIsTranslatingNow(false);
+          try {
+            const refined = await refineChapterTranslationSilently(
+              currentOrig,
+              sourceLang
+            );
+            if (!cancelled) {
+              setSilentTranslatedMap((prev) => ({
+                ...prev,
+                [currentKey]: refined,
+              }));
+            }
+          } finally {
+            if (!cancelled) {
+              setIsTranslatingNow(false);
+            }
           }
         }
       }
 
-      // 2. Traduzir título e sinopse do livro se ainda não traduzidos
-      if (!work.translatedTitlePt || !work.translatedSummaryPt) {
-        const [tTitle, tSum] = await translateStringsBatchNeural(
-          [work.title, work.summary],
-          sourceLang
-        );
-        if (!cancelled && tTitle) {
-          await db.works.update(work.id, {
-            translatedTitlePt: tTitle,
-            translatedSummaryPt: tSum || work.summary,
-          });
-        }
-      }
+      // 3. Traduzir título, sinopse e demais capítulos uma única vez em segundo plano
+      if (isPersistingAllChaptersRef.current) return;
+      isPersistingAllChaptersRef.current = true;
 
-      // 3. Traduzir silenciosamente os demais capítulos do livro e salvar no IndexedDB para funcionar offline!
-      const allTranslated: WorkChapter[] = [];
-      for (const ch of work.chapters) {
-        if (cancelled) return;
-        const key = `${sourceLang}:${ch.id}`;
-        if (silentTranslatedMap[key]) {
-          allTranslated.push(silentTranslatedMap[key]);
-        } else {
+      try {
+        if (!work.translatedTitlePt || !work.translatedSummaryPt) {
+          const [tTitle, tSum] = await translateStringsBatchNeural(
+            [work.title, work.summary],
+            sourceLang
+          );
+          if (!cancelled && tTitle) {
+            await db.works.update(work.id, {
+              translatedTitlePt: tTitle,
+              translatedSummaryPt: tSum || work.summary,
+            });
+          }
+        }
+
+        const allTranslated: WorkChapter[] = [];
+        for (const ch of work.chapters) {
+          if (cancelled) break;
+          const k = `${sourceLang}:${ch.id}`;
           const refined = await refineChapterTranslationSilently(
             ch,
             sourceLang
           );
+          translatedKeysSetRef.current.add(k);
           allTranslated.push(refined);
           if (!cancelled) {
-            setSilentTranslatedMap((prev) => ({ ...prev, [key]: refined }));
+            setSilentTranslatedMap((prev) => ({ ...prev, [k]: refined }));
           }
         }
-      }
 
-      if (!cancelled && allTranslated.length === work.chapters.length) {
-        await db.works.update(work.id, {
-          translatedChaptersPt: allTranslated,
-        });
+        if (!cancelled && allTranslated.length === work.chapters.length) {
+          await db.works.update(work.id, {
+            translatedChaptersPt: allTranslated,
+          });
+        }
+      } finally {
+        isPersistingAllChaptersRef.current = false;
       }
     };
 
@@ -310,7 +326,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     return () => {
       cancelled = true;
     };
-  }, [translateToPt, sourceLang, work, currentChapterIndex, silentTranslatedMap]);
+  }, [translateToPt, sourceLang, work?.id, currentChapterIndex]);
 
   const currentChapter = useMemo<WorkChapter | null>(() => {
     if (!baseChapter) return null;

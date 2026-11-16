@@ -1,4 +1,4 @@
-const CACHE_NAME = "ao3-personal-library-offline-v1";
+const CACHE_NAME = "ao3-personal-library-offline-v2";
 const ASSETS_TO_CACHE = ["/", "/manifest.json"];
 
 self.addEventListener("install", (event) => {
@@ -28,13 +28,25 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
+  const url = new URL(event.request.url);
+  // Nunca interceptar pacotes de hot-reload do Next.js (_next), extensões ou APIs
+  if (
+    url.pathname.startsWith("/_next/") ||
+    url.pathname.startsWith("/api/") ||
+    !url.protocol.startsWith("http")
+  ) {
+    return;
+  }
+
   event.respondWith(
     fetch(event.request)
       .then((networkResponse) => {
-        const responseClone = networkResponse.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseClone);
-        });
+        if (networkResponse && networkResponse.status === 200) {
+          const responseClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseClone);
+          });
+        }
         return networkResponse;
       })
       .catch(() => {
@@ -43,6 +55,7 @@ self.addEventListener("fetch", (event) => {
           if (event.request.mode === "navigate") {
             return caches.match("/");
           }
+          return new Response("Offline", { status: 503 });
         });
       })
   );
