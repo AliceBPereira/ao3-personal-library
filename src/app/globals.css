@@ -20,29 +20,20 @@
   }
 }
 
-.theme-bg {
-  background-color: var(--app-bg) !important;
-  color: var(--app-text) !important;
+.reader-prose {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: text;
 }
 
-.theme-surface {
-  background-color: var(--app-surface) !important;
-  color: var(--app-text) !important;
-  border-color: var(--app-border) !important;
+.reader-prose * {
+  user-select: text !important;
+  -webkit-user-select: text !important;
 }
 
-.theme-card {
-  background-color: var(--app-bg) !important;
-  color: var(--app-text) !important;
-  border-color: var(--app-border) !important;
-}
-
-.theme-muted {
-  color: var(--app-muted) !important;
-}
-
-.theme-border {
-  border-color: var(--app-border) !important;
+.reader-prose ::selection {
+  background-color: rgba(153, 0, 0, 0.22);
+  color: inherit;
 }
 
 .reader-prose p {
@@ -86,7 +77,6 @@
   margin-bottom: 0.35rem;
 }
 
-/* Regras para paginação estilo Kindle (CSS Multi-Column sem quebra feia de linhas) */
 .kindle-columns-flow {
   column-fill: auto;
 }

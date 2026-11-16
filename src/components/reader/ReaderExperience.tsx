@@ -24,11 +24,13 @@ import {
   ArrowLeft,
   Bookmark,
   BookOpen,
+  Check,
   ChevronLeft,
   ChevronRight,
   Clock,
   Columns,
   Compass,
+  Copy,
   Highlighter,
   Languages,
   MapPin,
@@ -65,8 +67,6 @@ const HIGHLIGHT_COLORS: Array<{
   { id: "amber", label: "Âmbar", bg: "#fde68a", border: "#d97706" },
 ];
 
-const COLUMN_GAP = 64;
-
 export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const {
     theme,
@@ -92,10 +92,9 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
   const [scrollPercent, setScrollPercent] = useState(0);
 
-  // Estado da Paginação Real Estilo Kindle (baseada na altura/largura exata da tela)
+  // Estado da Paginação Isolada Baseada na Altura Real da Tela (Sem Scroll e Sem Vazamento de Seleção!)
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
-  const [totalPagesInChapter, setTotalPagesInChapter] = useState(1);
-  const [viewportDims, setViewportDims] = useState({ width: 720, height: 520 });
+  const [measuredPagesHtml, setMeasuredPagesHtml] = useState<string[]>([""]);
 
   // Painéis laterais e modais do leitor
   const [showAppearanceMenu, setShowAppearanceMenu] = useState(false);
@@ -107,8 +106,9 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     Record<string, WorkChapter>
   >({});
 
-  // Estado de seleção de texto estilo Kindle
+  // Estado de seleção de texto estilo Kindle + Copiar
   const [selectedQuote, setSelectedQuote] = useState<string>("");
+  const [copiedFeedback, setCopiedFeedback] = useState(false);
   const [highlightNote, setHighlightNote] = useState<string>("");
   const [highlightColor, setHighlightColor] =
     useState<HighlightItem["color"]>("yellow");
@@ -126,7 +126,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const [newPinImage, setNewPinImage] = useState<string | undefined>(undefined);
 
   const kindleViewportRef = useRef<HTMLDivElement | null>(null);
-  const kindleColumnsRef = useRef<HTMLDivElement | null>(null);
+  const hiddenMeasurerRef = useRef<HTMLDivElement | null>(null);
   const hasRestoredProgress = useRef(false);
 
   useEffect(() => {
@@ -156,15 +156,12 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
   const baseChapter =
     rawChapters[currentChapterIndex] || rawChapters[0] || null;
 
-  // Quando translateToPt está ativo:
-  // 1) Aplica a tradução instantânea in-place na mesma hora (0ms, sem sair da página/scroll atual)
-  // 2) Em background invisível, refina todas as frases do livro e guarda em cache silencioso
+  // Refinamento silencioso em background estilo Google Translate
   useEffect(() => {
     if (!translateToPt || !work) return;
     let cancelled = false;
 
     const runSilentRefinement = async () => {
-      // Primeiro refinar o capítulo que o usuário está olhando agora
       const currentOrig = work.chapters[currentChapterIndex];
       if (currentOrig) {
         const key = `${sourceLang}:${currentOrig.id}`;
@@ -179,7 +176,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
         }
       }
 
-      // Depois traduzir silenciosamente os demais capítulos do livro inteiro em background
       for (const ch of work.chapters) {
         if (cancelled) break;
         const key = `${sourceLang}:${ch.id}`;
@@ -201,7 +197,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     };
   }, [translateToPt, sourceLang, work, currentChapterIndex, silentTranslatedMap]);
 
-  // Capítulo ativo renderizado in-place (Original vs Traduzido na hora)
   const currentChapter = useMemo<WorkChapter | null>(() => {
     if (!baseChapter) return null;
     if (!translateToPt) return baseChapter;
@@ -211,7 +206,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       return silentTranslatedMap[key];
     }
 
-    // Tradução síncrona imediata enquanto o refinamento invisível roda
     return {
       ...baseChapter,
       title: translatePlainStringOffline(baseChapter.title, sourceLang),
@@ -237,84 +231,161 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       : work.summary;
   }, [work?.summary, translateToPt, sourceLang]);
 
-  // Aplicar grifos visuais no HTML renderizado para os destaques salvos deste capítulo
   const chapterHighlights = useMemo(
     () => highlights.filter((h) => h.chapterIndex === currentChapterIndex),
     [highlights, currentChapterIndex]
   );
 
-  const decoratedChapterHtml = useMemo(() => {
-    const rawHtml = currentChapter?.htmlContent || "";
-    let decorated = rawHtml;
-    for (const hl of chapterHighlights) {
-      if (!hl.selectedText || hl.selectedText.length < 3) continue;
-      const colorDef =
-        HIGHLIGHT_COLORS.find((c) => c.id === hl.color) || HIGHLIGHT_COLORS[0];
-      const escaped = hl.selectedText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      try {
-        const regex = new RegExp(`(${escaped})`, "i");
-        decorated = decorated.replace(
-          regex,
-          `<mark data-hl-id="${hl.id}" style="background-color:${colorDef.bg}; color:#111; padding:1px 3px; border-bottom:2px solid ${colorDef.border}; border-radius:2px; cursor:pointer;" title="${
-            hl.note ? `Nota: ${hl.note}` : "Trecho destacado"
-          }">$1</mark>`
-        );
-      } catch {
-        // Ignore regex boundary error
+  const decorateHtmlWithHighlights = useCallback(
+    (rawHtml: string) => {
+      let decorated = rawHtml;
+      for (const hl of chapterHighlights) {
+        if (!hl.selectedText || hl.selectedText.length < 3) continue;
+        const colorDef =
+          HIGHLIGHT_COLORS.find((c) => c.id === hl.color) ||
+          HIGHLIGHT_COLORS[0];
+        const escaped = hl.selectedText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        try {
+          const regex = new RegExp(`(${escaped})`, "i");
+          decorated = decorated.replace(
+            regex,
+            `<mark data-hl-id="${hl.id}" style="background-color:${colorDef.bg}; color:#111; padding:1px 3px; border-bottom:2px solid ${colorDef.border}; border-radius:2px; cursor:pointer;" title="${
+              hl.note ? `Nota: ${hl.note}` : "Trecho destacado"
+            }">$1</mark>`
+          );
+        } catch {
+          // Ignore regex boundary error
+        }
       }
-    }
-    return decorated;
-  }, [currentChapter?.htmlContent, chapterHighlights]);
+      return decorated;
+    },
+    [chapterHighlights]
+  );
 
-  // Medir a tela exata da Paginação e calcular quantas páginas o capítulo ocupa sem nenhum scroll vertical
-  // Mantendo a proporção da página atual quando o idioma é trocado!
-  const measureKindlePagination = useCallback(() => {
+  const decoratedChapterHtml = useMemo(
+    () => decorateHtmlWithHighlights(currentChapter?.htmlContent || ""),
+    [currentChapter?.htmlContent, decorateHtmlWithHighlights]
+  );
+
+  // Motor de Paginação Real por Altura da Tela:
+  // Divide os parágrafos/sentenças em páginas isoladas que cabem 100% na altura disponível da janela (sem scroll!)
+  // Como apenas a página atual é renderizada no DOM visível, a seleção de mouse e cópia (Ctrl+C) ficam 100% exatas!
+  const buildDiscreteScreenPages = useCallback(() => {
     if (navigationMode !== "paginated") return;
     const vp = kindleViewportRef.current;
-    const cols = kindleColumnsRef.current;
-    if (!vp) return;
+    const measurer = hiddenMeasurerRef.current;
+    if (!vp || !measurer) return;
 
-    const w = Math.max(260, vp.clientWidth);
-    const h = Math.max(220, vp.clientHeight);
+    const availableHeight = Math.max(220, vp.clientHeight - 16);
+    const availableWidth = Math.max(260, vp.clientWidth);
 
-    setViewportDims((prev) =>
-      prev.width === w && prev.height === h ? prev : { width: w, height: h }
-    );
+    measurer.style.width = `${availableWidth}px`;
+    measurer.innerHTML = "";
 
-    if (cols) {
-      const totalScrollW = cols.scrollWidth;
-      const pageStep = w + COLUMN_GAP;
-      const computedPages = Math.max(
-        1,
-        Math.round((totalScrollW + COLUMN_GAP) / pageStep)
-      );
-      setTotalPagesInChapter(computedPages);
-      setCurrentPageIndex((prevPage) =>
-        Math.min(prevPage, Math.max(0, computedPages - 1))
-      );
+    const tempContainer = document.createElement("div");
+    tempContainer.innerHTML = decoratedChapterHtml || "<p></p>";
+
+    // Extrair unidades atômicas (parágrafos/blocos)
+    const rawNodes = Array.from(tempContainer.childNodes);
+    const blocksHtml: string[] = [];
+
+    rawNodes.forEach((node) => {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const el = node as HTMLElement;
+        blocksHtml.push(el.outerHTML);
+      } else if (
+        node.nodeType === Node.TEXT_NODE &&
+        node.textContent?.trim()
+      ) {
+        blocksHtml.push(`<p>${node.textContent.trim()}</p>`);
+      }
+    });
+
+    if (blocksHtml.length === 0) {
+      setMeasuredPagesHtml([decoratedChapterHtml || "<p></p>"]);
+      return;
     }
-  }, [navigationMode]);
+
+    const pages: string[] = [];
+    let currentBucket: string[] = [];
+
+    const flushBucket = () => {
+      if (currentBucket.length > 0) {
+        pages.push(currentBucket.join("\n"));
+        currentBucket = [];
+      }
+    };
+
+    for (let i = 0; i < blocksHtml.length; i++) {
+      const block = blocksHtml[i];
+      const candidate = [...currentBucket, block].join("\n");
+      measurer.innerHTML = candidate;
+
+      if (measurer.scrollHeight <= availableHeight) {
+        currentBucket.push(block);
+      } else {
+        // Se o próprio parágrafo sozinho for maior que a tela inteira (ex: fonte muito grande), dividir por frases
+        if (currentBucket.length === 0) {
+          const singleDiv = document.createElement("div");
+          singleDiv.innerHTML = block;
+          const text = singleDiv.textContent || "";
+          const sentences = text.match(/[^.!?]+[.!?]*\s*/g) || [text];
+          let sentenceChunk = "";
+
+          for (const sent of sentences) {
+            const testParagraph = `<p>${sentenceChunk}${sent}</p>`;
+            measurer.innerHTML = testParagraph;
+            if (
+              measurer.scrollHeight > availableHeight &&
+              sentenceChunk.trim().length > 0
+            ) {
+              pages.push(`<p>${sentenceChunk.trim()}</p>`);
+              sentenceChunk = sent;
+            } else {
+              sentenceChunk += sent;
+            }
+          }
+          if (sentenceChunk.trim().length > 0) {
+            currentBucket = [`<p>${sentenceChunk.trim()}</p>`];
+          }
+        } else {
+          // Fechar a página atual e iniciar uma nova com este bloco
+          flushBucket();
+          currentBucket = [block];
+        }
+      }
+    }
+
+    flushBucket();
+    measurer.innerHTML = "";
+
+    const finalPages = pages.length > 0 ? pages : [decoratedChapterHtml];
+    setMeasuredPagesHtml(finalPages);
+    setCurrentPageIndex((prev) =>
+      Math.min(prev, Math.max(0, finalPages.length - 1))
+    );
+  }, [navigationMode, decoratedChapterHtml]);
 
   useEffect(() => {
     if (navigationMode !== "paginated") return;
     const timer = setTimeout(() => {
-      measureKindlePagination();
-    }, 30);
+      buildDiscreteScreenPages();
+    }, 25);
 
     const vp = kindleViewportRef.current;
     let observer: ResizeObserver | null = null;
     if (vp && typeof ResizeObserver !== "undefined") {
       observer = new ResizeObserver(() => {
-        measureKindlePagination();
+        buildDiscreteScreenPages();
       });
       observer.observe(vp);
     }
 
-    window.addEventListener("resize", measureKindlePagination);
+    window.addEventListener("resize", buildDiscreteScreenPages);
     return () => {
       clearTimeout(timer);
       if (observer) observer.disconnect();
-      window.removeEventListener("resize", measureKindlePagination);
+      window.removeEventListener("resize", buildDiscreteScreenPages);
     };
   }, [
     navigationMode,
@@ -327,8 +398,10 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
     translateToPt,
     viewingPinnedPage,
     returnAnchor,
-    measureKindlePagination,
+    buildDiscreteScreenPages,
   ]);
+
+  const totalPagesInChapter = measuredPagesHtml.length || 1;
 
   // Restaurar posição salva ao abrir o livro
   useEffect(() => {
@@ -355,27 +428,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       }, 220);
     }
   }, [work, navigationMode]);
-
-  useEffect(() => {
-    if (
-      navigationMode === "paginated" &&
-      totalPagesInChapter > 1 &&
-      scrollPercent > 0 &&
-      currentPageIndex === 0
-    ) {
-      const targetPage = Math.min(
-        totalPagesInChapter - 1,
-        Math.max(
-          0,
-          Math.round((scrollPercent / 100) * (totalPagesInChapter - 1))
-        )
-      );
-      if (targetPage > 0) {
-        setCurrentPageIndex(targetPage);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigationMode, totalPagesInChapter]);
 
   const effectiveChapterPercent = useMemo(() => {
     if (navigationMode === "paginated") {
@@ -460,7 +512,10 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       ) {
         return;
       }
-      if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") {
+      // Não interceptar Ctrl+C / Cmd+C!
+      if (e.ctrlKey || e.metaKey) return;
+
+      if (e.key === "ArrowRight" || e.key === "PageDown") {
         e.preventDefault();
         handleNextPage();
       } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
@@ -474,34 +529,31 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
 
   const handleMouseUpSelection = () => {
     if (typeof window === "undefined") return;
-    const sel = window.getSelection();
-    const text = sel?.toString().trim() || "";
-    if (text.length >= 3) {
-      setSelectedQuote(text);
-    }
+    setTimeout(() => {
+      const sel = window.getSelection();
+      const text = sel?.toString().trim() || "";
+      if (text.length >= 2) {
+        setSelectedQuote(text);
+        setCopiedFeedback(false);
+      }
+    }, 15);
   };
 
-  const handleKindleSurfaceClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (navigationMode !== "paginated") return;
-
-    const sel = window.getSelection();
-    if (sel && sel.toString().trim().length > 0) {
-      return;
-    }
-
-    const target = e.target as HTMLElement;
-    if (target.closest("button, a, input, select, textarea, mark")) {
-      return;
-    }
-
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const width = rect.width;
-
-    if (clickX < width * 0.35) {
-      handlePrevPage();
-    } else {
-      handleNextPage();
+  const handleCopyText = async (textToCopy: string) => {
+    if (!textToCopy) return;
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      setCopiedFeedback(true);
+      setTimeout(() => setCopiedFeedback(false), 2000);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = textToCopy;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      setCopiedFeedback(true);
+      setTimeout(() => setCopiedFeedback(false), 2000);
     }
   };
 
@@ -713,6 +765,10 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
       : "font-ao3Sans";
 
   const isPaginated = navigationMode === "paginated";
+  const currentDiscretePageHtml =
+    measuredPagesHtml[currentPageIndex] ||
+    measuredPagesHtml[0] ||
+    decoratedChapterHtml;
 
   return (
     <div
@@ -724,6 +780,18 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
         color: activeTheme.text,
       }}
     >
+      {/* Medidor Invisível para Calcular as Páginas Exatas da Altura da Tela sem Usar CSS Multi-Column */}
+      <div
+        ref={hiddenMeasurerRef}
+        aria-hidden="true"
+        className={`${fontClass} reader-prose fixed -left-[9999px] top-0 invisible pointer-events-none`}
+        style={{
+          fontSize: `${fontSize}px`,
+          lineHeight: lineHeight,
+          maxWidth: `${maxWidth}px`,
+        }}
+      />
+
       {/* ================= BARRA SUPERIOR DO LEITOR (FIXA E SEMPRE ACESSÍVEL) ================= */}
       <header
         className="sticky top-0 left-0 right-0 shrink-0 z-40 border-b px-3 sm:px-6 py-2 transition-all shadow-sm"
@@ -994,7 +1062,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               </button>
             </div>
 
-            {/* 6 Temas de Papel */}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
               {(Object.keys(READER_THEMES) as ReaderThemeId[]).map((tKey) => {
                 const t = READER_THEMES[tKey];
@@ -1034,7 +1101,6 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               })}
             </div>
 
-            {/* Controles de Fonte, Tamanho das Letras, Espaçamento e Velocidade WPM */}
             <div
               className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2 border-t"
               style={{ borderColor: activeTheme.border }}
@@ -1152,30 +1218,38 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
         </div>
       )}
 
-      {/* ================= BARRA FLUTUANTE DE SELEÇÃO (DESTAQUE ESTILO KINDLE) ================= */}
+      {/* ================= BARRA FLUTUANTE DE SELEÇÃO (COPIAR & DESTACAR ESTILO KINDLE) ================= */}
       {selectedQuote && (
-        <div className="fixed bottom-14 left-1/2 -translate-x-1/2 z-40 w-[92%] max-w-lg bg-white text-[#222] border-2 border-[#990000] rounded-sm shadow-2xl p-3 font-ao3Sans text-[12.5px]">
-          <div className="flex items-center justify-between mb-1.5">
+        <div className="fixed bottom-14 left-1/2 -translate-x-1/2 z-50 w-[94%] max-w-xl bg-white text-[#222] border-2 border-[#990000] rounded-sm shadow-2xl p-3.5 font-ao3Sans text-[12.5px]">
+          <div className="flex items-center justify-between mb-2">
             <span className="font-bold text-[#990000] flex items-center gap-1.5">
               <Sparkles className="w-4 h-4" />
-              Destacar Trecho Selecionado (Estilo Kindle)
+              Trecho Selecionado (Você pode copiar ou salvar como destaque)
             </span>
             <button
               type="button"
-              onClick={() => setSelectedQuote("")}
-              className="text-[#666] hover:text-black"
+              onClick={() => {
+                setSelectedQuote("");
+                window.getSelection()?.removeAllRanges();
+              }}
+              className="text-[#666] hover:text-black p-0.5"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          <p className="italic text-[12px] text-[#444] bg-[#f7f7f7] p-2 border-l-2 border-[#990000] line-clamp-2 mb-2">
-            &ldquo;{selectedQuote}&rdquo;
-          </p>
+          <textarea
+            rows={2}
+            value={selectedQuote}
+            onChange={(e) => setSelectedQuote(e.target.value)}
+            className="w-full text-[12.5px] text-[#222] bg-[#f9f9f9] p-2 border border-[#ccc] border-l-4 border-l-[#990000] rounded-sm mb-2.5 focus:outline-none"
+          />
 
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
             <div className="flex items-center gap-1.5">
-              <span className="text-[11.5px] text-[#555]">Cor:</span>
+              <span className="text-[11.5px] text-[#555]">
+                Cor do destaque:
+              </span>
               {HIGHLIGHT_COLORS.map((c) => (
                 <button
                   key={c.id}
@@ -1201,161 +1275,166 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
             />
           </div>
 
-          <div className="flex justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-[#eee]">
             <button
               type="button"
-              onClick={() => setSelectedQuote("")}
-              className="px-2.5 py-1 border border-[#ccc] text-[12px] rounded-sm"
+              onClick={() => handleCopyText(selectedQuote)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-[#222222] hover:bg-black text-white font-medium text-[12px] rounded-sm transition-colors"
             >
-              Cancelar
+              {copiedFeedback ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-green-400" />
+                  Copiado!
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  Copiar Texto
+                </>
+              )}
             </button>
-            <button
-              type="button"
-              onClick={handleSaveHighlight}
-              className="px-3 py-1 bg-[#990000] text-white font-medium text-[12px] rounded-sm"
-            >
-              Salvar Destaque
-            </button>
+
+            <div className="flex items-center gap-2 ml-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedQuote("");
+                  window.getSelection()?.removeAllRanges();
+                }}
+                className="px-2.5 py-1.5 border border-[#ccc] text-[12px] rounded-sm hover:bg-[#f3f3f3]"
+              >
+                Fechar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveHighlight}
+                className="px-3.5 py-1.5 bg-[#990000] hover:bg-[#700000] text-white font-medium text-[12px] rounded-sm"
+              >
+                Salvar Destaque
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* ================= ÁREA DE LEITURA: PAGINAÇÃO (SEM SCROLL) vs ROLAGEM ================= */}
+      {/* ================= ÁREA DE LEITURA: PAGINAÇÃO ISOLADA (SEM SCROLL) vs ROLAGEM ================= */}
       {isPaginated ? (
         <main
-          onClick={handleKindleSurfaceClick}
           onMouseUp={handleMouseUpSelection}
-          className="flex-1 relative flex items-center justify-center overflow-hidden px-8 sm:px-14 py-4 cursor-pointer"
-          title="Clique no lado direito para avançar a página ou no lado esquerdo para voltar"
+          className="flex-1 relative flex flex-col items-center justify-center overflow-hidden px-12 sm:px-20 py-3"
         >
-          {/* Zona / Botão Lateral Esquerdo (Página Anterior) */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              handlePrevPage();
-            }}
-            disabled={currentChapterIndex === 0 && currentPageIndex === 0}
-            className="absolute left-1.5 sm:left-3 top-1/2 -translate-y-1/2 z-20 p-2 rounded-full border opacity-40 hover:opacity-100 disabled:opacity-10 transition-opacity"
-            style={{
-              backgroundColor: activeTheme.surface,
-              borderColor: activeTheme.border,
-              color: activeTheme.text,
-            }}
-            title="Página Anterior (ou clique no lado esquerdo da página)"
+          {/* Margem Lateral Esquerda Clicável para Voltar Página (Isolada do Texto!) */}
+          <div
+            onClick={handlePrevPage}
+            className="absolute left-0 top-0 bottom-0 w-10 sm:w-16 z-20 flex items-center justify-center cursor-pointer group hover:bg-black/[0.04] transition-colors select-none"
+            title="Clique aqui para voltar a página (←)"
           >
-            <ChevronLeft className="w-5 h-5" />
-          </button>
+            <button
+              type="button"
+              disabled={currentChapterIndex === 0 && currentPageIndex === 0}
+              className="p-2 rounded-full border opacity-55 group-hover:opacity-100 disabled:opacity-10 transition-opacity"
+              style={{
+                backgroundColor: activeTheme.surface,
+                borderColor: activeTheme.border,
+                color: activeTheme.text,
+              }}
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+          </div>
 
-          {/* Container da Página que mede exatamente a altura e largura disponíveis na tela */}
+          {/* Cabeçalho Discreto da Página Atual */}
+          <div
+            className="w-full shrink-0 mb-2 pb-1.5 border-b flex items-center justify-between text-[11px] font-ao3Sans select-none"
+            style={{
+              maxWidth: `${maxWidth}px`,
+              borderColor: activeTheme.border,
+              color: activeTheme.muted,
+            }}
+          >
+            <span className="truncate">
+              {displayedWorkTitle} —{" "}
+              <strong style={{ color: activeTheme.accent }}>
+                {currentChapter?.title || `Capítulo ${currentChapterIndex + 1}`}
+              </strong>
+            </span>
+            <span className="shrink-0 ml-2">
+              Pág. {currentPageIndex + 1}/{totalPagesInChapter}
+            </span>
+          </div>
+
+          {/* Caso esteja consultando uma Página Especial Fixada */}
+          {viewingPinnedPage && (
+            <div
+              className="w-full shrink-0 mb-2 p-2.5 rounded-sm border text-[12.5px]"
+              style={{
+                maxWidth: `${maxWidth}px`,
+                borderColor: activeTheme.accent,
+                backgroundColor: activeTheme.surface,
+              }}
+            >
+              <div className="font-bold mb-0.5">
+                📌{" "}
+                {translateToPt
+                  ? translatePlainStringOffline(
+                      viewingPinnedPage.title,
+                      sourceLang
+                    )
+                  : viewingPinnedPage.title}
+              </div>
+              {viewingPinnedPage.customHtmlOrNotes && (
+                <p className="whitespace-pre-line">
+                  {translateToPt
+                    ? translatePlainStringOffline(
+                        viewingPinnedPage.customHtmlOrNotes,
+                        sourceLang
+                      )
+                    : viewingPinnedPage.customHtmlOrNotes}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Container Central da Página Única: Só existe o texto desta página no DOM (Seleção e Cópia 100% precisas!) */}
           <div
             ref={kindleViewportRef}
-            className="w-full h-full overflow-hidden relative"
+            className="w-full flex-1 overflow-hidden relative cursor-text select-text"
             style={{ maxWidth: `${maxWidth}px` }}
           >
-            <div
-              ref={kindleColumnsRef}
-              className={`${fontClass} reader-prose kindle-columns-flow h-full transition-transform duration-300 ease-out`}
+            <article
+              className={`${fontClass} reader-prose select-text`}
               style={{
                 fontSize: `${fontSize}px`,
                 lineHeight: lineHeight,
-                height: `${viewportDims.height}px`,
-                columnWidth: `${viewportDims.width}px`,
-                columnGap: `${COLUMN_GAP}px`,
-                columnFill: "auto",
-                transform: `translate3d(-${
-                  currentPageIndex * (viewportDims.width + COLUMN_GAP)
-                }px, 0, 0)`,
               }}
-            >
-              {/* Cabeçalho compacto no início do capítulo */}
-              <div
-                className="mb-4 pb-2 border-b"
-                style={{ borderColor: activeTheme.border }}
-              >
-                <div
-                  className="text-[11px] uppercase tracking-wider font-ao3Sans"
-                  style={{ color: activeTheme.muted }}
-                >
-                  {displayedWorkTitle} • {work.author}
-                </div>
-                <h2
-                  className="text-[1.2em] font-serif font-bold mt-0.5"
-                  style={{ color: activeTheme.accent }}
-                >
-                  {currentChapter?.title ||
-                    `Capítulo ${currentChapterIndex + 1}`}
-                </h2>
-              </div>
-
-              {/* Caso esteja consultando uma Página Especial Fixada */}
-              {viewingPinnedPage && (
-                <div
-                  className="mb-4 p-3 rounded-sm border"
-                  style={{
-                    borderColor: activeTheme.accent,
-                    backgroundColor: activeTheme.surface,
-                  }}
-                >
-                  <div className="font-bold text-[0.9em] mb-1">
-                    📌{" "}
-                    {translateToPt
-                      ? translatePlainStringOffline(
-                          viewingPinnedPage.title,
-                          sourceLang
-                        )
-                      : viewingPinnedPage.title}
-                  </div>
-                  {viewingPinnedPage.customHtmlOrNotes && (
-                    <p className="text-[0.88em] whitespace-pre-line">
-                      {translateToPt
-                        ? translatePlainStringOffline(
-                            viewingPinnedPage.customHtmlOrNotes,
-                            sourceLang
-                          )
-                        : viewingPinnedPage.customHtmlOrNotes}
-                    </p>
-                  )}
-                  {viewingPinnedPage.imageDataUrl && (
-                    <img
-                      src={viewingPinnedPage.imageDataUrl}
-                      alt={viewingPinnedPage.title}
-                      className="max-h-[260px] w-auto mx-auto rounded my-2"
-                    />
-                  )}
-                </div>
-              )}
-
-              {/* Conteúdo HTML do capítulo paginado automaticamente pelas colunas do tamanho da tela */}
-              <div
-                dangerouslySetInnerHTML={{
-                  __html: decoratedChapterHtml,
-                }}
-              />
-            </div>
+              dangerouslySetInnerHTML={{
+                __html: currentDiscretePageHtml,
+              }}
+            />
           </div>
 
-          {/* Zona / Botão Lateral Direito (Próxima Página) */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleNextPage();
-            }}
-            disabled={
-              currentChapterIndex === rawChapters.length - 1 &&
-              currentPageIndex >= totalPagesInChapter - 1
-            }
-            className="absolute right-1.5 sm:right-3 top-1/2 -translate-y-1/2 z-20 p-2 rounded-full border opacity-40 hover:opacity-100 disabled:opacity-10 transition-opacity"
-            style={{
-              backgroundColor: activeTheme.surface,
-              borderColor: activeTheme.border,
-              color: activeTheme.text,
-            }}
-            title="Próxima Página (ou clique no lado direito da página)"
+          {/* Margem Lateral Direita Clicável para Avançar Página (Isolada do Texto!) */}
+          <div
+            onClick={handleNextPage}
+            className="absolute right-0 top-0 bottom-0 w-10 sm:w-16 z-20 flex items-center justify-center cursor-pointer group hover:bg-black/[0.04] transition-colors select-none"
+            title="Clique aqui para passar a página (→)"
           >
-            <ChevronRight className="w-5 h-5" />
-          </button>
+            <button
+              type="button"
+              disabled={
+                currentChapterIndex === rawChapters.length - 1 &&
+                currentPageIndex >= totalPagesInChapter - 1
+              }
+              className="p-2 rounded-full border opacity-55 group-hover:opacity-100 disabled:opacity-10 transition-opacity"
+              style={{
+                backgroundColor: activeTheme.surface,
+                borderColor: activeTheme.border,
+                color: activeTheme.text,
+              }}
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
         </main>
       ) : (
         /* ================= MODO ROLAGEM VERTICAL CONTÍNUA ================= */
@@ -1507,7 +1586,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
               className="text-[11.5px]"
               style={{ color: activeTheme.muted }}
             >
-              Selecione qualquer frase com o mouse para destacar (Estilo Kindle)
+              Selecione qualquer frase com o mouse para copiar ou destacar
             </span>
           </div>
 
@@ -1612,8 +1691,8 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 <strong style={{ color: activeTheme.accent }}>
                   {currentPageIndex + 1}
                 </strong>{" "}
-                de <strong>{totalPagesInChapter}</strong> (Clique nas laterais
-                da tela para passar a página)
+                de <strong>{totalPagesInChapter}</strong> (Clique nas margens
+                laterais ou use ← → para passar a página)
               </span>
             ) : (
               <span>
@@ -1672,7 +1751,7 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                 {highlights.length === 0 ? (
                   <p className="text-[#666] text-[12px] bg-[#f9f9f9] p-3 border border-[#e5e5e5] rounded-sm">
                     Nenhum trecho destacado ainda. Selecione qualquer frase do
-                    texto com o mouse para abrir o marca-texto colorido!
+                    texto com o mouse para copiar ou abrir o marca-texto!
                   </p>
                 ) : (
                   <div className="space-y-2.5">
@@ -1723,19 +1802,30 @@ export function ReaderExperience({ workId }: ReaderExperienceProps) {
                             </p>
                           )}
 
-                          <button
-                            type="button"
-                            onClick={() =>
-                              jumpToPosition(
-                                hl.chapterIndex,
-                                hl.scrollPercentage,
-                                hl.pageNumber
-                              )
-                            }
-                            className="mt-2 text-[11.5px] text-[#990000] font-semibold hover:underline"
-                          >
-                            Ir direto ao trecho no texto →
-                          </button>
+                          <div className="flex items-center justify-between gap-2 mt-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                jumpToPosition(
+                                  hl.chapterIndex,
+                                  hl.scrollPercentage,
+                                  hl.pageNumber
+                                )
+                              }
+                              className="text-[11.5px] text-[#990000] font-semibold hover:underline"
+                            >
+                              Ir direto ao trecho no texto →
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyText(hl.selectedText)}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 border border-[#ccc] bg-white hover:bg-[#eee] rounded-sm text-[11px] text-[#333]"
+                              title="Copiar citação"
+                            >
+                              <Copy className="w-3 h-3" />
+                              Copiar
+                            </button>
+                          </div>
                         </div>
                       );
                     })}
