@@ -149,6 +149,91 @@ export async function addOrSyncTrackedWorkFromAo3Url(
   return saveTrackedWorkFromPayload(data, manualChaptersRead, notes);
 }
 
+// Busca todas as fanfics em que a usuária está inscrita (Subscriptions) na conta do AO3 via Extensão e adiciona ao acompanhamento!
+export async function importAllUserSubscriptionsFromAo3(
+  username?: string,
+  onProgress?: (current: number, total: number, title: string) => void
+): Promise<{ username: string; importedCount: number }> {
+  if (typeof window === "undefined") {
+    throw new Error("Disponível apenas no navegador.");
+  }
+
+  const isExtInstalled =
+    document.documentElement.getAttribute("data-ao3-extension-installed") ===
+    "true";
+
+  if (!isExtInstalled) {
+    throw new Error(
+      "Para buscar suas Inscrições (Subscriptions) privadas do AO3 automaticamente, recarregue a nossa Extensão em chrome://extensions (ou edge://extensions) e dê F5 nesta página!"
+    );
+  }
+
+  const subListResult = await new Promise<{
+    username: string;
+    subscriptions: Array<{ workId: string; title: string }>;
+  }>((resolve, reject) => {
+    const requestId = `sub-${Date.now()}`;
+    const timeout = setTimeout(() => {
+      window.removeEventListener("message", handler);
+      reject(
+        new Error(
+          "Tempo esgotado ao consultar suas Subscriptions no AO3. Verifique se você está logada em archiveofourown.org neste navegador."
+        )
+      );
+    }, 15000);
+
+    const handler = (event: MessageEvent) => {
+      if (
+        event.data &&
+        event.data.type === "AO3_PERSONAL_SUBSCRIPTIONS_RESPONSE" &&
+        event.data.requestId === requestId
+      ) {
+        clearTimeout(timeout);
+        window.removeEventListener("message", handler);
+        if (event.data.ok && event.data.data) {
+          resolve(event.data.data);
+        } else {
+          reject(
+            new Error(
+              event.data.error ||
+                "Não foi possível listar suas Subscriptions do AO3."
+            )
+          );
+        }
+      }
+    };
+
+    window.addEventListener("message", handler);
+    window.postMessage(
+      {
+        type: "AO3_PERSONAL_SUBSCRIPTIONS_REQUEST",
+        requestId,
+        username: username || "",
+      },
+      "*"
+    );
+  });
+
+  const subs = subListResult.subscriptions || [];
+  let importedCount = 0;
+
+  for (let i = 0; i < subs.length; i++) {
+    const item = subs[i];
+    onProgress?.(i + 1, subs.length, item.title || `Obra #${item.workId}`);
+    try {
+      await addOrSyncTrackedWorkFromAo3Url(item.workId);
+      importedCount++;
+    } catch {
+      // Continuar para a próxima inscrição mesmo se uma obra estiver indisponível
+    }
+  }
+
+  return {
+    username: subListResult.username,
+    importedCount,
+  };
+}
+
 // Percorre todas as fanfics acompanhadas e consulta o AO3 Original para ver quais atualizaram!
 export async function checkAllTrackedWorksOnAo3Original(
   onProgress?: (current: number, total: number, title: string) => void
